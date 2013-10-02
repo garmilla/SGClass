@@ -1,12 +1,12 @@
 from distutils.core import setup, Extension
 
-gsl_dir = '/home/rfadely/local/'
+gsl_dir = '/usr/'
 src_dir = './'
 
 extmod1 = Extension('_model_maker',
                     include_dirs = [gsl_dir+'include'],
                     libraries = ['gsl'],
-                    library_dirs = [gsl_dir+'lib'], 
+                    library_dirs = [gsl_dir+'lib64'], 
                     sources = [src_dir+'_model_maker.c',
                                src_dir+'calc_normalization.c',
                                src_dir+'get_filelength.c',

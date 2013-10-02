@@ -8,6 +8,7 @@ import pyfits as pf
 from scipy.optimize import fmin_l_bfgs_b
 from utils import *
 
+import pdb
 
 class HBsep(object):
     """
@@ -46,6 +47,8 @@ class HBsep(object):
         """
         Prepare for and call model maker.
         """
+
+        #pdb.set_trace()
         # load funtion
         model_maker = ct.CDLL('./_model_maker.so')
 

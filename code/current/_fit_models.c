@@ -15,6 +15,7 @@
 //
 
 #include <stdio.h>
+#include <math.h>
 
 int fit_one(long,double*,double*,double*,double*,double*,double*);
 
