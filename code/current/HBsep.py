@@ -381,6 +381,7 @@ class HBsep(object):
             for i in range(self.Nclasses):
                 if self.Nzs[i] == 1:
                     continue
+                key = self.class_labels[i]
                 self.z_pow[key] = hyperparms[count:count+1]
                 count += 1
 
