@@ -2,17 +2,16 @@ import numpy as np
 from HBsep import HBsep
 import pdb
 
-
-Nzs = [1, 10]
-z_maxs = [0.0, 7.0]
-class_labels = ['stars', 'galaxy_and_qsos']
+Nzs = [1, 10, 10]
+z_maxs = [0.0, 4.0, 7.0]
+class_labels = ['star', 'galaxy', 'qso']
 filter_list_path = 'filter_list_path'
-list_of_sed_list_paths = ['sed_list_star_path', 'sed_list_galaxy_path']
+list_of_sed_list_paths = ['sed/star', 'sed/galaxy', 'sed/qso']
 data = 'result.txt'
 method = 1
-filename = 'output.fit'
-z_median = [0.0, 3.5]
-z_pow = [0.0, 0.0]
+filename = 'classification.fit'
+z_median = [0.0, 2.0, 3.5]
+z_pow = [0.0, 0.0, 0.0]
 
 pdb.set_trace()
 classifier = HBsep(class_labels, Nzs, z_maxs)
