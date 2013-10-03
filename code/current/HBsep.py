@@ -1,6 +1,7 @@
 # Author - Ross Fadely
 #
 import numpy as np
+#np.seterr(all='raise')
 np.seterr(divide='ignore')
 import ctypes as ct
 import pyfits as pf
@@ -77,7 +78,7 @@ class HBsep(object):
                                 zmax, filt_norm_p, models_p)
 
     def create_models(self, filter_list_path, list_of_sed_list_paths,
-                      normalize_models=True):
+                      normalize_models=False):
         """
         For each class, produce models over redshifts
         """
@@ -374,6 +375,7 @@ class HBsep(object):
                 if self.Nzs[i] == 1:
                     continue
                 key = self.class_labels[i]
+                Ntemplate = np.int(self.model_fluxes[key].shape[0] / self.Nzs[i])
                 self.z_medians[key] = \
                     np.array(hyperparms[count:count+Ntemplate])
                 count += Ntemplate
@@ -431,6 +433,8 @@ class HBsep(object):
             p0 = np.append(p0, np.ones(Ntemplate) * np.log(1./Ntemplate))
         for i in range(self.Nclasses):
             if self.Nzs[i] != 1:
+                key = self.class_labels[i]
+                Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
                 p0 = np.append(p0, np.ones(Ntemplate) * z_median[i])
         for i in range(self.Nclasses):
             if self.Nzs[i] != 1:
@@ -451,6 +455,8 @@ class HBsep(object):
             bounds.extend([(-1.*np.Inf, np.Inf) for j in range(Ntemplate)])
         for i in range(self.Nclasses):
             if self.Nzs[i] != 1:
+                key = self.class_labels[i]
+                Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
                 bounds.extend([(0.05, self.z_maxs[i]) for j in
                                range(Ntemplate)])
         for i in range(self.Nclasses):
@@ -462,7 +468,7 @@ class HBsep(object):
         return bounds
 
     def optimize(self, z_median=None, z_pow=None, init_p0=None,
-                 eps=1.e-1, factr=1.e7, maxfun=1):
+                 eps=1.e-1, factr=1.e7, maxfun=15000):
         """
         Optimize using scipy's fmin_l_bfgs_b
         """
