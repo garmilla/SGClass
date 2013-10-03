@@ -110,7 +110,6 @@ void model_maker(char *filterlist,char *sedlist,long filter_only,long Nz,
     // Read in SEDs, regrid, calculate fluxes
     for (ii=0; ii<Nsed; ii++) {
         // Read SEDs
-	printf("get_filelength(%li,%s, %li);\n", ii, sedlist, N);
         get_filelength(ii,sedlist, N);
         sed_wave = (double *)malloc(*N * sizeof(double));
         sed_flux = (double *)malloc(*N * sizeof(double));
