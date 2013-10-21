@@ -1,8 +1,8 @@
 # Author - Ross Fadely
 #
 import numpy as np
-#np.seterr(all='raise')
-np.seterr(divide='ignore')
+np.seterr(all='warn')
+#np.seterr(divide='ignore')
 import ctypes as ct
 import pyfits as pf
 
@@ -10,6 +10,24 @@ from scipy.optimize import fmin_l_bfgs_b
 from utils import *
 
 import pdb
+import pickle
+
+def zero_to_floor(array, floor = 1.e-100):
+    """
+    Change the zero values in an array to floor
+    """
+    change = np.where(array.ravel() == 0.0)[0]
+    for i in change:
+        array.ravel()[i] = floor
+
+def floor_to_zero(array, floor = 1.e-100):
+    """
+    Change the values in an array that are less than floor
+    to zero
+    """
+    change = np.where(array.ravel() < floor)[0]
+    for i in change:
+        array.ravel()[i] = 0.0
 
 class HBsep(object):
     """
@@ -78,7 +96,7 @@ class HBsep(object):
                                 zmax, filt_norm_p, models_p)
 
     def create_models(self, filter_list_path, list_of_sed_list_paths,
-                      normalize_models=False):
+                      normalize_models=True):
         """
         For each class, produce models over redshifts
         """
@@ -106,6 +124,15 @@ class HBsep(object):
             self._make_models(sed_list_path, filter_list_path, self.Nzs[i],
                               self.z_min, self.z_maxs[i],
                               self.model_fluxes[key])
+
+            # remove models with zero fluxes
+            #hasZero = np.any(self.model_fluxes[key] == 0.0, axis=1)
+	    #remove = np.where(hasZero)[0]
+	    #if len(remove) > 0:
+	    #    self.model_fluxes[key] = np.delete(self.model_fluxes[key], remove, axis=0)
+
+	    # change zeros for floor to avoid problems
+	    zero_to_floor(self.model_fluxes[key])
 
             # normalize models
             if normalize_models:
@@ -291,6 +318,8 @@ class HBsep(object):
                                        prior_meansp, prior_varsp,
                                        det_flux_errorsp, chi2sp, marglikep)
 
+	    floor_to_zero(self.coeff_marg_like[key])
+
             # Flag bad fits
             self.bad_fit_flags[key] = np.zeros(self.Ndata)
             ind = np.where(self.coeff_marg_like[key].sum(axis=1) < floor)[0]
@@ -336,15 +365,27 @@ class HBsep(object):
             if Nz == 1:
                 self.zc_marg_like[key] = self.coeff_marg_like[key]
                 continue
-            zgrid = np.linspace(0, self.z_maxs[i], Nz)
+            zgrid = np.linspace(1.e-10, self.z_maxs[i], Nz)
 
             self.zc_marg_like[key] = np.zeros((self.Ndata, Ntemplate))
             if method == 1:
                 # shape = Nmodel,Nz
                 z_medians = np.array([np.ones(Nz) * zmed
                                       for zmed in self.z_medians[key]])
+		if np.any(z_medians == 0.0):
+		    print "z_medians is zero!"
+		#with open('z_medians.pkl', 'w') as f:
+		#    pickle.dump(z_medians, f)
+		#with open('z_pow.pkl', 'w') as f:
+		#    pickle.dump(self.z_pow[key], f)
+		#with open('zgrid.pkl', 'w') as f:
+		#    pickle.dump(zgrid, f)
                 z_prior = zgrid**self.z_pow[key] * \
                     np.exp(-(zgrid/z_medians)**self.z_pow[key])
+		if np.any(z_prior.sum(axis=1)[:, None] == 0.0):
+		    print "z_prior.sum(axis=1) is zero!"
+		    print "z_grid", zgrid
+	        floor_to_zero(z_prior)
                 z_prior /= z_prior.sum(axis=1)[:, None]
                 prior_weighted_like = self.coeff_marg_like[key] * \
                     z_prior.ravel()[None, :]
@@ -365,6 +406,8 @@ class HBsep(object):
             Ntemplate = np.int(self.model_fluxes[key].shape[0] / self.Nzs[i])
             self.template_weights[key] = \
                 np.exp(np.array(hyperparms[count:count+Ntemplate]))
+	    if self.template_weights[key].sum() == 0.0:
+	        print "self.template_weights[{0}].sum() is zero!".format(key)
             self.template_weights[key] /= self.template_weights[key].sum()
             count += Ntemplate
 
@@ -388,6 +431,8 @@ class HBsep(object):
                 count += 1
 
         self.class_weights = np.exp(np.array(hyperparms[-self.Nclasses:]))
+	if self.class_weights.sum() == 0.0:
+	    print "self.class_weights.sum() is zero!"
         self.class_weights /= self.class_weights.sum()
 
     def calc_neg_lnlike(self, method, floor=1e-100):
@@ -457,11 +502,11 @@ class HBsep(object):
             if self.Nzs[i] != 1:
                 key = self.class_labels[i]
                 Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
-                bounds.extend([(0.05, self.z_maxs[i]) for j in
+                bounds.extend([(1.0, self.z_maxs[i]) for j in
                                range(Ntemplate)])
         for i in range(self.Nclasses):
             if self.Nzs[i] != 1:
-                bounds.extend([(0., 4)])
+                bounds.extend([(0., 2.)])
         for i in range(self.Nclasses):
             bounds.extend([(-1.*np.Inf, np.Inf)])
 
