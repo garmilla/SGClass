@@ -464,6 +464,9 @@ class HBsep(object):
         self.assign_hyperparms(hyperparms, method)
         self.apply_and_marg_redshift_prior(method)
         self.calc_neg_lnlike(method)
+	if np.isnan(self.neg_log_likelihood):
+	    self.neg_log_likelihood = np.Inf
+	#print self.neg_log_likelihood
         return self.neg_log_likelihood
 
     def init_hyperparms(self, z_median, z_pow):
@@ -502,7 +505,7 @@ class HBsep(object):
             if self.Nzs[i] != 1:
                 key = self.class_labels[i]
                 Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
-                bounds.extend([(1.0, self.z_maxs[i]) for j in
+                bounds.extend([(0.1, self.z_maxs[i]) for j in
                                range(Ntemplate)])
         for i in range(self.Nclasses):
             if self.Nzs[i] != 1:
