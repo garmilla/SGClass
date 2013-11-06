@@ -10,3 +10,6 @@ dist/*
 filt/*
 MANIFEST
 iterate.dat
+documents/*
+/code/current/filt/*
+/code/current/dist/*
