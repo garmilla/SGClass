@@ -34,10 +34,11 @@ class HBsep(object):
     Hierarchical Bayesian classification of astronomical 
     objects, using photometry.
     """
-    def __init__(self, class_labels, Nzs, z_maxs=None, z_min=0.):
+    def __init__(self, class_labels, Nzs, z_maxs=None, z_min=0., method=1):
 
         self.Nzs = Nzs
         self.z_min = z_min
+	self.method = method
         
         if z_maxs is None:
             self.z_maxs = np.zeros(len(Nzs))
@@ -350,7 +351,7 @@ class HBsep(object):
             self.coeff_prior_means[key] = mean
             self.coeff_prior_vars[key] = var
 
-    def apply_and_marg_redshift_prior(self, method):
+    def apply_and_marg_redshift_prior(self):
         """
         Apply redshift prior and margninalize over redshift
         """
@@ -368,7 +369,7 @@ class HBsep(object):
             zgrid = np.linspace(1.e-10, self.z_maxs[i], Nz)
 
             self.zc_marg_like[key] = np.zeros((self.Ndata, Ntemplate))
-            if method == 1:
+            if self.method == 1:
                 # shape = Nmodel,Nz
                 z_medians = np.array([np.ones(Nz) * zmed
                                       for zmed in self.z_medians[key]])
@@ -393,7 +394,7 @@ class HBsep(object):
                     self.zc_marg_like[key][:, j] = \
                         np.sum(prior_weighted_like[:, j*Nz:j*Nz+Nz], axis=1)
 
-    def assign_hyperparms(self, hyperparms, method):
+    def assign_hyperparms(self, hyperparms):
         """
         Assign hyperparameters from a flattened list (from optimizer)
         """
@@ -412,7 +413,7 @@ class HBsep(object):
             count += Ntemplate
 
         # prior parms
-        if method == 1:
+        if self.method == 1:
             self.z_medians = {}
             for i in range(self.Nclasses):
                 if self.Nzs[i] == 1:
@@ -435,7 +436,7 @@ class HBsep(object):
 	    print "self.class_weights.sum() is zero!"
         self.class_weights /= self.class_weights.sum()
 
-    def calc_neg_lnlike(self, method, floor=1e-100):
+    def calc_neg_lnlike(self, floor=1e-100):
         """
         Calculate marginalized likelihoods.
         """
@@ -454,16 +455,16 @@ class HBsep(object):
 
         self.neg_log_likelihood = -1.0 * np.sum(np.log(self.marg_like[ind]))
 
-    def call_neg_lnlike(self, hyperparms, method=1):
+    def call_neg_lnlike(self, hyperparms):
         """
         Give this to optimizer to call.
         """
         weights = np.exp(np.array(hyperparms[-self.Nclasses:]))
         if np.Inf in weights:
             return np.Inf
-        self.assign_hyperparms(hyperparms, method)
-        self.apply_and_marg_redshift_prior(method)
-        self.calc_neg_lnlike(method)
+        self.assign_hyperparms(hyperparms)
+        self.apply_and_marg_redshift_prior()
+        self.calc_neg_lnlike()
 	if np.isnan(self.neg_log_likelihood):
 	    self.neg_log_likelihood = np.Inf
 	#print self.neg_log_likelihood
@@ -480,12 +481,12 @@ class HBsep(object):
             Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
             p0 = np.append(p0, np.ones(Ntemplate) * np.log(1./Ntemplate))
         for i in range(self.Nclasses):
-            if self.Nzs[i] != 1:
+            if self.Nzs[i] != 1 and self.method == 1:
                 key = self.class_labels[i]
                 Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
                 p0 = np.append(p0, np.ones(Ntemplate) * z_median[i])
         for i in range(self.Nclasses):
-            if self.Nzs[i] != 1:
+            if self.Nzs[i] != 1 and self.method == 1:
                 p0 = np.append(p0, z_pow[i])
         for i in range(self.Nclasses):
             p0 = np.append(p0, np.log(1./self.Nclasses))
@@ -502,13 +503,13 @@ class HBsep(object):
             Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
             bounds.extend([(-1.*np.Inf, np.Inf) for j in range(Ntemplate)])
         for i in range(self.Nclasses):
-            if self.Nzs[i] != 1:
+            if self.Nzs[i] != 1 and self.method == 1:
                 key = self.class_labels[i]
                 Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
                 bounds.extend([(0.1, self.z_maxs[i]) for j in
                                range(Ntemplate)])
         for i in range(self.Nclasses):
-            if self.Nzs[i] != 1:
+            if self.Nzs[i] != 1 and self.method == 1:
                 bounds.extend([(0., 2.)])
         for i in range(self.Nclasses):
             bounds.extend([(-1.*np.Inf, np.Inf)])
