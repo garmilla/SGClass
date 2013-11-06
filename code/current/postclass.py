@@ -1,9 +1,8 @@
-import matplotlib.pyplot as plt
 import pyfits
 import numpy as np
-import sys
 import csv
-import pdb
+import pickle
+import matplotlib.pyplot as plt
 
 class PhotoObj:
 # Class that contains the list of objects in a classification run
@@ -38,6 +37,7 @@ class PhotoObj:
 	'The number of objects in the {0} and {1} do not match'.format(classifications, catalogue)
 	self.Nobj = i
 	self.build_list()
+	self.HBsep_file = classifications[:-3] + 'pkl'
 
     def build_list(self):
     # Build list that contains the objects
@@ -53,7 +53,7 @@ class PhotoObj:
 		if indx == 0:
 	            Obj['ctype'] = 'star'
 		elif indx == 1:
-	            Obj['ctype'] = 'gal'
+	            Obj['ctype'] = 'galaxy'
 		elif indx == 2:
 	            Obj['ctype'] = 'qso'
 		else:
@@ -99,4 +99,45 @@ class PhotoObj:
 	else:
 	    colors_ind = self.select_colors(colors, ranges)
 	ind = set(type_ind).intersection(set(colors_ind))
-	return ind
+	return list(ind)
+
+    def hierarchichal_template_list(self, index):
+    # Get the list of templates that contribute the most for each class and the
+    # weights for the classes themselves
+        # Load the HBsep instance for the corresponding classification
+	# (Typically a large object ~ 1 Gb)
+        with open(self.HBsep_file, 'rb') as f:
+            HBsep = pickle.load(f)
+	self.templates = {}
+	self.classes = {}
+	for i in range(HBsep.Nclasses):
+	    key = HBsep.class_labels[i]
+	    self.classes[key] = HBsep.class_weights[i]
+	    self.templates[key] = []
+            Ntemplate = np.int(HBsep.model_fluxes[key].shape[0] / HBsep.Nzs[i])
+	    for j in range(Ntemplate):
+	        temp_prob = HBsep.zc_marg_like[key][index][j]*\
+		            HBsep.template_weights[key][j]
+		if HBsep.Nzs[i] != 1:
+		    z_median = HBsep.z_medians[key][j]
+		    z_pow = HBsep.z_pow[key][0]
+	            self.templates[key].append((j, temp_prob, z_median, z_pow))
+		else:
+	            self.templates[key].append((j, temp_prob))
+	    self.templates[key].sort(key= lambda tup:-tup[1])
+
+def get_template_fname(key, index):
+# Get the file that contains the template with index "index" in class "key"
+    fname = "sed/" + key
+    with open(fname, 'r') as f:
+        templates = f.readlines()
+    template = templates[index]
+    return template
+
+def plot_template(fname):
+    fname = fname[0:-1]
+    data = np.loadtxt(fname)
+    plt.figure()
+    plt.title(fname)
+    plt.plot(data[:,0], data[:,1])
+    plt.show()
