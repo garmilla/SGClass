@@ -516,7 +516,7 @@ class HBsep(object):
         return bounds
 
     def optimize(self, z_median=None, z_pow=None, init_p0=None,
-                 eps=1.e-1, factr=1.e7, maxfun=15000):
+                 eps=1.e-1, factr=1.e4, maxfun=15000):
         """
         Optimize using scipy's fmin_l_bfgs_b
         """

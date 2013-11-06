@@ -1,9 +1,0 @@
-*.pyc
-*.o
-*.so
-*.fit
-*.txt
-dist/*
-filt/*
-MANIFEST
-iterate.dat
