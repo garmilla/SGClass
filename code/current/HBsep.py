@@ -7,7 +7,9 @@ import ctypes as ct
 import pyfits as pf
 
 from scipy.optimize import fmin_l_bfgs_b
+from scipy.integrate import romberg
 from utils import *
+from lum_funcs import *
 
 import pdb
 import pickle
@@ -34,7 +36,7 @@ class HBsep(object):
     Hierarchical Bayesian classification of astronomical 
     objects, using photometry.
     """
-    def __init__(self, class_labels, Nzs, z_maxs=None, z_min=0., method=1):
+    def __init__(self, class_labels, Nzs, z_maxs=None, z_min=0., method=1, zrefs=None):
 
         self.Nzs = Nzs
         self.z_min = z_min
@@ -50,6 +52,15 @@ class HBsep(object):
 
         self.model_mags = {}
         self.model_fluxes = {}
+	if self.method == 2:
+	    # Initialize cosmological parameters
+	    self.O0 = 0.272
+	    self.Ol = 0.728
+	    self.H0 = 69.32 # In km/s/Mpc
+            self.h = 0.6932 # From WMAP
+	    # Speed of light in km/s
+            self.c = 3.0e5
+	    self.zrefs = zrefs
 
     def get_filter_norm(self, filter_list_path):
         """
@@ -351,6 +362,55 @@ class HBsep(object):
             self.coeff_prior_means[key] = mean
             self.coeff_prior_vars[key] = var
 
+    def func(z):
+        return np.power(np.power(1+z, 2)*(self.O0*z+1)-self.Ol*z*(z+2), -0.5)
+    
+    def get_D(z):
+        r = self.c/self.H0*romberg(func, 0, z)
+        D = r
+        return D
+
+    def dVc(z, D = None):
+        if D == None:
+            D = get_D(z)
+        dVc = self.c/self.H0*D**2*(self.O0*z+1)-self.Ol*z*(z+2), -0.5)
+        return dVc
+
+    def init_D_grid():
+        self.D = {}
+        for i in range(self.Nclasses):
+            Nz = self.Nzs[i]
+            if Nz == 1:
+                continue
+            key = self.class_labels[i]
+            zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
+	    self.D[key] = np.zeros((Nz,))
+	    for i in range(Nz):
+	        self.D[key][i] = get_D(zgrid[i])
+
+    def fixed_c_marginalization(self):
+    """
+    Marginalize over fixed priors for C's
+    """
+        self.abs_mags = {}
+        for i in range(self.Nclasses):
+            Nz = self.Nzs[i]
+            if Nz == 1:
+                continue
+            key = self.class_labels[i]
+            self.abs_mags[key] = np.zeros(self.model_mags[key].shape)
+            Nmodel = self.model_fluxes[key].shape[0]
+	    Ntemplate = Nmodel/Nz
+            zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
+            idx = (np.abs(zgrid-self.zref[i])).argmin()
+	    for j in range(Ntemplate):
+	        for k in range(Nz):
+                    factor = self.coeffs[key][j*Nz+k]*(self.D[k]/1.0e-5)**2/\
+		             self.coeffs[key][j*Nz+idx]
+		    self.abs_mags[key][j*Nz+k] = self.model_mags[key][j*Nz+k]\
+		                                 -2.5*np.log10(factor)
+		    self.lum_func(key, self.abs_mags[key])
+
     def apply_and_marg_redshift_prior(self):
         """
         Apply redshift prior and margninalize over redshift
@@ -366,7 +426,7 @@ class HBsep(object):
             if Nz == 1:
                 self.zc_marg_like[key] = self.coeff_marg_like[key]
                 continue
-            zgrid = np.linspace(1.e-10, self.z_maxs[i], Nz)
+            zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
 
             self.zc_marg_like[key] = np.zeros((self.Ndata, Ntemplate))
             if self.method == 1:
@@ -416,7 +476,7 @@ class HBsep(object):
         if self.method == 1:
             self.z_medians = {}
             for i in range(self.Nclasses):
-                if self.Nzs[i] == 1:
+                if self.Nzs[i] == 1 or self.method != 1:
                     continue
                 key = self.class_labels[i]
                 Ntemplate = np.int(self.model_fluxes[key].shape[0] / self.Nzs[i])
@@ -425,7 +485,7 @@ class HBsep(object):
                 count += Ntemplate
             self.z_pow = {}
             for i in range(self.Nclasses):
-                if self.Nzs[i] == 1:
+                if self.Nzs[i] == 1 or self.method != 1:
                     continue
                 key = self.class_labels[i]
                 self.z_pow[key] = hyperparms[count:count+1]
@@ -463,7 +523,8 @@ class HBsep(object):
         if np.Inf in weights:
             return np.Inf
         self.assign_hyperparms(hyperparms)
-        self.apply_and_marg_redshift_prior()
+	if self.method == 1:
+            self.apply_and_marg_redshift_prior()
         self.calc_neg_lnlike()
 	if np.isnan(self.neg_log_likelihood):
 	    self.neg_log_likelihood = np.Inf
@@ -525,6 +586,10 @@ class HBsep(object):
             p0 = init_p0
         else:
             p0 = self.init_hyperparms(z_median, z_pow)
+
+        if self.method == 2:
+	    self.init_D_grid()
+	    self.fixed_c_marginalization()
 
         bounds = self.init_hyperparm_bounds()
 
