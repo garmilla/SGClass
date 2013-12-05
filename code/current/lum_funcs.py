@@ -1,4 +1,7 @@
+import re
 import numpy as np
+from scipy.integrate import cumtrapz
+from scipy.interpolate import griddata
 
 Lsun = 3.839e33
 Lvega = 40.12*Lsun
@@ -138,16 +141,21 @@ def load_bd_luminosities(sed_files):
     index = np.concatenate((index_dusty, index_cond, index_NextGen))
     return (index, L)
 
-def get_star_lums(sed_list_path):
+def get_star_kms(sed_list_path):
     sed_files = np.loadtxt(sed_list_path, dtype="string")
-    Lums = np.zeros(sed_files.shape)
+    kms = np.zeros(sed_files.shape)
     (ibd, Lbd) = load_bd_luminosities(sed_files)
     for i in range(len(ibd)):
-        Lums[ibd[i]] = Lbd[i]
+        sed = np.loadtxt(sed_files[ibd[i]])
+	kms[ibd[i]] = Lbd[i]/(4*np.pi*cumtrapz(sed[:,1], sed[:,0])[-1])
     pickles_dic = load_pickles_dic()
     for (i, sed_file) in enumerate(sed_files):
         if 'PICKLES' in sed_file:
-	    Lums[i] = pickles_lum(sed_file, pickles_dic)
+	    Lum = pickles_lum(sed_file, pickles_dic)
         elif 'WD' in sed_file:
-	    Lums[i] = wd_lum(sed_file)
-    return Lums
+	    Lum = wd_lum(sed_file)
+	else:
+	    continue
+        sed = np.loadtxt(sed_file)
+	kms[i] = Lum/(4*np.pi*cumtrapz(sed[:,1], sed[:,0])[-1])
+    return kms
