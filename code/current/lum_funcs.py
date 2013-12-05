@@ -1,5 +1,8 @@
 import numpy as np
 
+Lsun = 3.839e33
+Lvega = 40.12*Lsun
+
 def Phi_gal(M, band='r'):
     h = 0.6932
     if band == 'u': 
@@ -58,3 +61,93 @@ def Phi_qso(M, z, band='i'):
     mu = M - (Mstar + B1*xi + B2*xi**2 + B3*xi**3)
     Phi = Phistar*np.power(10.0, mu*(A1+A2*(z-2.45)))
     return Phi
+
+def load_pickles_dic():
+    table2 = np.loadtxt('pickles_lum.txt', dtype='string')
+    pickles_dic = {}
+    for row in table2:
+        sptype = row[4][1:-1].upper()
+	Mbol = float(row[14])
+	L = np.power(10.0, -2.0/5*Mbol)*Lvega
+        pickles_dic[sptype] = L
+    return pickles_dic
+
+def pickles_lum(sed_file, pickles_dic=None):
+    if pickles_dic == None:
+        pickles_dic = load_pickles_dic()
+    p = re.compile(r'.*PICKLES/')
+    m = p.match(sed_file)
+    sptype = sed_file[m.end():-4].upper()
+    L = pickles_dic[sptype]
+    return L
+
+def wd_lum(sed_file):
+    if 'g191b2b' in sed_file:
+        Mb = 2.932
+    elif 'gd153' in sed_file:
+        Mb = 4.830
+    elif 'gd71' in sed_file:
+        Mb = 6.169
+    elif 'hz43' in sed_file:
+        Mb = 4.676
+    L = np.power(10.0, -2.5*Mb)*Lvega
+    return L
+
+def load_allard_isochrones(isochrones_file):
+    isochrones = np.loadtxt(isochrones_file)
+    Teff = isochrones[:,1]
+    logL = isochrones[:,2]
+    logg = isochrones[:,3]
+    grid = np.empty((len(Teff),2))
+    grid[:,0] = Teff
+    grid[:,1] = logg
+    return grid, logL
+
+def interpolate_allard_isochrones(isochrones_file, Teff_i, logg_i):
+    xi = np.empty((len(Teff_i),2))
+    xi[:,0] = Teff_i
+    xi[:,1] = logg_i
+    grid, logL = load_allard_isochrones(isochrones_file)
+    L_i = np.power(10.0, griddata(grid, logL, xi, method="cubic"))*Lsun
+    indexes = np.where(np.isnan(L_i))
+    for i in indexes:
+        L_i[i] = np.power(10.0, griddata(grid, logL, xi[i], method="nearest"))*Lsun
+    return L_i
+
+def load_bd_luminosities(sed_files):
+    Teff_dusty = [] ; logg_dusty = [] ; index_dusty = []
+    Teff_cond = [] ; logg_cond = [] ; index_cond = []
+    Teff_NextGen = [] ; logg_NextGen = [] ; index_NextGen = []
+    for (i, sed_file) in enumerate(sed_files):
+        if 'AMES-dusty' in sed_file:
+            Teff_dusty.append(float(sed_file[-27:-25])*1.0e2)
+            logg_dusty.append(float(sed_file[-24:-21]))
+	    index_dusty.append(i)
+        elif 'AMES-cond' in sed_file:
+            Teff_cond.append(float(sed_file[-26:-24])*1.0e2)
+            logg_cond.append(float(sed_file[-23:-20]))
+	    index_cond.append(i)
+        elif 'NextGen' in sed_file:
+            Teff_NextGen.append(float(sed_file[-24:-22])*1.0e2)
+            logg_NextGen.append(float(sed_file[-21:-18]))
+	    index_NextGen.append(i)
+    L_dusty = interpolate_allard_isochrones('model.AMES-dusty.SDSS', Teff_dusty, logg_dusty)
+    L_cond = interpolate_allard_isochrones('model.AMES-Cond-2000.SDSS', Teff_cond, logg_cond)
+    L_NextGen = interpolate_allard_isochrones('model.NextGen.M-0.0.SDSS', Teff_NextGen, logg_NextGen)
+    L = np.concatenate((L_dusty, L_cond, L_NextGen))
+    index = np.concatenate((index_dusty, index_cond, index_NextGen))
+    return (index, L)
+
+def get_star_lums(sed_list_path):
+    sed_files = np.loadtxt(sed_list_path, dtype="string")
+    Lums = np.zeros(sed_files.shape)
+    (ibd, Lbd) = load_bd_luminosities(sed_files)
+    for i in range(len(ibd)):
+        Lums[ibd[i]] = Lbd[i]
+    pickles_dic = load_pickles_dic()
+    for (i, sed_file) in enumerate(sed_files):
+        if 'PICKLES' in sed_file:
+	    Lums[i] = pickles_lum(sed_file, pickles_dic)
+        elif 'WD' in sed_file:
+	    Lums[i] = wd_lum(sed_file)
+    return Lums
