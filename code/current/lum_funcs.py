@@ -38,9 +38,9 @@ def Phi_gal(M, band='r'):
 	a1 = -0.34
 	ph2 = 0.38*1.0e-2*h**3
 	a2 = -1.60
-    Phi = 0.4*np.log(10.0)*np.exp(-np.power(10.0,-0.4*(Mr-Mstar)))*\
-          (ph1*np.power(10.0,-0.4*(Mr-Mstar)*(a1+1))+\
-           ph2*np.power(10.0,-0.4*(Mr-Mstar)*(a2+1)))
+    Phi = 0.4*np.log(10.0)*np.exp(-np.power(10.0,-0.4*(M-Mstar)))*\
+          (ph1*np.power(10.0,-0.4*(M-Mstar)*(a1+1))+\
+           ph2*np.power(10.0,-0.4*(M-Mstar)*(a2+1)))
     return Phi
 
 def Phi_qso(M, z, band='i'):
