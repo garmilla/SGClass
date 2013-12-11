@@ -95,3 +95,36 @@ def quick_HB_assess(star_prob,gal_prob,truth):
     ind = np.where(truth==0)[0]
     print 'HB gal'
     print cgalaxy,truth[ind].shape[0],cgalaxy/truth[ind].shape[0],'\n'
+
+def eq2gal(ra,dec):
+    """
+    Convert Equatorial coordinates to Galactic Coordinates in the epch J2000.
+    
+    Keywords arguments:
+    ra  -- Right Ascension (in radians)
+    dec -- Declination (in radians)
+
+    Return a tuple (l, b):
+    l -- Galactic longitude (in radians)
+    b -- Galactic latitude (in radians)
+    """
+   # RA(radians),Dec(radians) of Galactic Northpole in J2000
+    Galactic_Northpole_Equatorial=(np.radians(192.859508), np.radians(27.128336))
+
+    alpha = Galactic_Northpole_Equatorial[0]
+    delta = Galactic_Northpole_Equatorial[1]
+    la = np.radians(33.0)
+    
+    b = np.arcsin(np.sin(dec) * np.sin(delta) +
+                  np.cos(dec) * np.cos(delta) * np.cos(ra - alpha))
+
+    l = np.arctan2(np.sin(dec) * np.cos(delta) - 
+                   np.cos(dec) * np.sin(delta) * np.cos(ra - alpha), 
+                   np.cos(dec) * np.sin(ra - alpha)
+                   ) + la
+
+    l = l if l >= 0 else (l + np.pi * 2.0)
+
+    l = l % (2.0 * np.pi)
+
+    return l, b
