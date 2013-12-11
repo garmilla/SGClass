@@ -45,7 +45,7 @@ class HBsep(object):
         self.Nzs = Nzs
         self.z_min = z_min
 	self.method = method
-	self.num = 101
+	self.num = 1001
 
         if z_maxs is None:
             self.z_maxs = np.zeros(len(Nzs))
@@ -456,7 +456,8 @@ class HBsep(object):
         return margin_func
 
     def marginalize(self, func, a, b, args=()):
-        x = np.linspace(a, b, num=self.num)
+        lnx = np.linspace(np.log(a), np.log(b), num=self.num)
+	x = np.exp(lnx)
 	y = np.zeros(x.shape)
 	n_args = len(args)
 	for i in range(len(x)):
@@ -467,11 +468,13 @@ class HBsep(object):
 	    elif n_args == 4:
 	        y[i] = func(x[i], args[0], args[1], args[2], args[3])
 	#plt.figure()
+	#plt.xlabel("C")
+	#plt.ylabel("Likelihood times Prior")
 	#plt.semilogx(x, y)
 	#plt.show()
-	#integral = simps(y, x)
-	dx = x[1]-x[0]
-	integral = np.sum(y*dx)
+	integral = simps(y*x, lnx)
+	#dx = x[1]-x[0]
+	#integral = np.sum(y*dx)
 	return integral
 
     def init_Cstarpriors(self, key, Ntemplate):
@@ -513,7 +516,7 @@ class HBsep(object):
 		                             self.Clims[key][i*Nz+j][1],\
 		 			     args=(key, i*Nz,j))[0]
 
-    def fixed_c_marginalization(self):
+    def fixed_c_marginalization(self, floor = 1.0e-100):
         """
         Marginalize over fixed priors for C's
         """
@@ -522,6 +525,8 @@ class HBsep(object):
 	self.c_normal = {}
 	self.zgrid = {}
         self.coeff_marg_like = {}
+        self.ignored = np.zeros(self.Ndata)
+        self.bad_fit_flags = {}
         for i in range(self.Nclasses):
             Nz = self.Nzs[i]
             key = self.class_labels[i]
@@ -536,7 +541,7 @@ class HBsep(object):
 	        self.init_Cstarpriors(key, Ntemplate)
 		print "\nComputing C's marginalized likelihoods for stars"
        	        for j in range(Ntemplate):
-		    print "Template {0}".format(j)
+		    #print "Template {0}".format(j)
 		    for n in range(self.Ndata):
 		        self.coeff_marg_like[key][n,j] =\
 			                  self.marginalize(self.star_margin_func,\
@@ -556,6 +561,17 @@ class HBsep(object):
 		                                 self.Clims[key][j*Nz+k][0],\
 		                                 self.Clims[key][j*Nz+k][1],\
 		 			         args=(key,n,j*Nz,k))
+            # Flag bad fits
+            self.bad_fit_flags[key] = np.zeros(self.Ndata)
+            ind = np.where(self.coeff_marg_like[key].sum(axis=1) < floor)[0]
+            self.bad_fit_flags[key][ind] = 1
+            self.ignored[ind] += 1
+
+        # construct index for likelihood estimation
+        ind = np.where(self.ignored < self.Nclasses)[0]
+        self.use = ind
+        ind = np.where(self.ignored == self.Nclasses)[0]
+        self.ignore = ind
 
     def apply_and_marg_redshift_prior(self):
         """
@@ -569,9 +585,18 @@ class HBsep(object):
             Nmodel = self.model_fluxes[key].shape[0]
             Ntemplate = Nmodel/Nz
 
-            if Nz == 1 or self.method == 2:
+            if Nz == 1:
                 self.zc_marg_like[key] = self.coeff_marg_like[key]
                 continue
+
+	    if self.method == 2:
+                self.zc_marg_like[key] = np.zeros((self.Ndata,Ntemplate))
+		for n in range(self.Ndata):
+                    for j in range(Ntemplate):
+                        self.zc_marg_like[key][n][j] =\
+                             np.sum(self.coeff_marg_like[key][n][Nz*j:Nz*(j+1)])
+                continue
+
             zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
 
             self.zc_marg_like[key] = np.zeros((self.Ndata, Ntemplate))
