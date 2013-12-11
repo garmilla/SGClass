@@ -7,7 +7,8 @@ import ctypes as ct
 import pyfits as pf
 
 from scipy.optimize import fmin_l_bfgs_b
-from scipy.integrate import romberg
+from scipy.integrate import romberg, simps, quad
+import matplotlib.pyplot as plt
 from utils import *
 from lum_funcs import *
 
@@ -33,20 +34,24 @@ def floor_to_zero(array, floor = 1.e-100):
 
 class HBsep(object):
     """
-    Hierarchical Bayesian classification of astronomical 
+    Hierarchical Bayesian classification of astronomical
     objects, using photometry.
     """
-    def __init__(self, class_labels, Nzs, z_maxs=None, z_min=0., method=1, zrefs=None):
+    def __init__(self, ra, dec, maglims, filts, class_labels, Nzs, z_maxs=None, z_min=0., method=1, zrefs=None):
 
+	self.l, self.b = eq2gal(ra,dec)
+	self.maglims = maglims
+	self.filts = filts
         self.Nzs = Nzs
         self.z_min = z_min
 	self.method = method
-        
+	self.num = 101
+
         if z_maxs is None:
             self.z_maxs = np.zeros(len(Nzs))
         else:
             self.z_maxs = z_maxs
-            
+
         self.class_labels = class_labels
         self.Nclasses = len(class_labels)
 
@@ -59,8 +64,12 @@ class HBsep(object):
 	    self.H0 = 69.32 # In km/s/Mpc
             self.h = 0.6932 # From WMAP
 	    # Speed of light in km/s
-            self.c = 3.0e5
-	    self.zrefs = zrefs
+            self.c = 3.0e5 # in km/s
+	    self.zrefs = {}
+	    for (i, c) in enumerate(class_labels):
+	        self.zrefs[c] = zrefs[i] # Reference redshifts, typically z_min
+	    pc = 3.08567758e18 # Parsec in cm
+	    self.rsun = 8.0*1.0e3*pc #Distance from the sun to the galactic center
 
     def get_filter_norm(self, filter_list_path):
         """
@@ -121,6 +130,9 @@ class HBsep(object):
         for i in range(self.Nclasses):
             key = self.class_labels[i]
             sed_list_path = list_of_sed_list_paths[i]
+
+	    if key == 'star' and self.method == 2:
+	        self.kms = get_star_kms(sed_list_path)
 
             # get number of seds in class
             f = open(sed_list_path)
@@ -362,22 +374,33 @@ class HBsep(object):
             self.coeff_prior_means[key] = mean
             self.coeff_prior_vars[key] = var
 
-    def func(z):
+    def func(self, z):
         return np.power(np.power(1+z, 2)*(self.O0*z+1)-self.Ol*z*(z+2), -0.5)
-    
-    def get_D(z):
-        r = self.c/self.H0*romberg(func, 0, z)
+
+    def get_D(self, z):
+        """
+        Get comoving distance at redshift z
+        """
+        r = self.c/self.H0*romberg(self.func, 0, z)
         D = r
         return D
 
-    def dVc(z, D = None):
+    def get_dVc(self, z, D = None):
+        """
+        Get comoving volume element at redshift z
+        """
         if D == None:
             D = get_D(z)
-        dVc = self.c/self.H0*D**2*(self.O0*z+1)-self.Ol*z*(z+2), -0.5)
+        dVc = self.c/self.H0*D**2*\
+	      np.power(np.power(1+z, 2)*(self.O0*z+1)-self.Ol*z*(z+2), -0.5)
         return dVc
 
-    def init_D_grid():
+    def init_D_dVc_grid(self):
+        """
+        Initialize grid of comoving distances
+        """
         self.D = {}
+        self.dVc = {}
         for i in range(self.Nclasses):
             Nz = self.Nzs[i]
             if Nz == 1:
@@ -385,31 +408,154 @@ class HBsep(object):
             key = self.class_labels[i]
             zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
 	    self.D[key] = np.zeros((Nz,))
+	    self.dVc[key] = np.zeros((Nz,))
 	    for i in range(Nz):
-	        self.D[key][i] = get_D(zgrid[i])
+	        self.D[key][i] = self.get_D(zgrid[i])
+	        self.dVc[key][i] = self.get_dVc(zgrid[i], self.D[key][i])
+
+    def Cstar_prior(self, C, key, m):
+        Prior = np.power(C, -5.0/2)/\
+	        np.sqrt(self.rsun**2+self.kms[m]/C-\
+		        2*self.rsun*np.sqrt(self.kms[m]/C)*\
+			np.cos(self.b)*np.cos(self.l))
+        return Prior
+
+    def Cz_prior(self, C, key, idx, zidx):
+        ref = (np.abs(self.zgrid[key]-self.zrefs[key])).argmin()
+        M = C*np.power(self.D[key][zidx]*(1+self.zgrid[key][zidx])/1.0e-5, 2)\
+	   *self.model_fluxes[key][idx+ref]/self.filter_norms
+	M = -2.5*np.log10(M)
+	if key == 'galaxy':
+	    Phi = Phi_gal(M[2], band='r') # Use r-band
+	elif key == 'qso':
+	    Phi = Phi_qso(M[3], self.zgrid[key][zidx], band='i') # Use i-band
+	return Phi/C*self.dVc[key][zidx]
+
+    def Chisqrd(self, n, m, C, key):
+        temp = (self.fluxes[n]-C*self.model_fluxes[key][m])/self.flux_errors[n]
+	temp = np.power(temp, 2)
+	chisqrd = np.sum(temp)
+	return chisqrd
+
+    def data_lkhood(self, n, m, C, key):
+        log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
+	             - 0.5*self.Chisqrd(n, m, C, key)
+	return np.exp(log_lkhood)
+
+    def star_margin_func(self, C, key, n, m):
+        margin_func = self.data_lkhood(n,m,C,key)*\
+                      self.Cstar_prior(C,key,m)/\
+                      self.c_normal[key][m]
+        return margin_func
+
+    def z_margin_func(self, C, key, n, idx, zidx):
+        m = idx+zidx
+        margin_func = self.data_lkhood(n,m,C,key)*\
+                      self.Cz_prior(C,key,idx,zidx)/\
+                      self.c_normal[key][m]
+        return margin_func
+
+    def marginalize(self, func, a, b, args=()):
+        x = np.linspace(a, b, num=self.num)
+	y = np.zeros(x.shape)
+	n_args = len(args)
+	for i in range(len(x)):
+	    if n_args == 2:
+	        y[i] = func(x[i], args[0], args[1])
+	    elif n_args == 3:
+	        y[i] = func(x[i], args[0], args[1], args[2])
+	    elif n_args == 4:
+	        y[i] = func(x[i], args[0], args[1], args[2], args[3])
+	#plt.figure()
+	#plt.semilogx(x, y)
+	#plt.show()
+	#integral = simps(y, x)
+	dx = x[1]-x[0]
+	integral = np.sum(y*dx)
+	return integral
+
+    def init_Cstarpriors(self, key, Ntemplate):
+        """
+        Find the limits for C from the magnitude limits of the sample
+        """
+        self.Clims[key] = np.zeros((Ntemplate, 2))
+        self.c_normal[key] = np.zeros((Ntemplate,))
+	Clims = np.zeros((len(self.filts),2))
+	for i in range(Ntemplate):
+	    for j in range(len(self.filts)):
+	        Clims[j] = np.power(10.0, -5.0/2*self.maglims)*\
+	                   self.filter_norms[self.filts[j]]/\
+	    	           self.model_fluxes[key][i][j]
+	    self.Clims[key][i][0] = np.amin(Clims[:,0])
+	    self.Clims[key][i][1] = np.amax(Clims[:,1])
+	    self.c_normal[key][i] = quad(self.Cstar_prior,\
+	                            self.Clims[key][i][0],\
+	                            self.Clims[key][i][1],\
+	     			    args=(key, i))[0]
+
+    def init_Czpriors(self, key, Ntemplate, Nz):
+        """
+        Find the limits for C from the magnitude limits of the sample
+        """
+        self.Clims[key] = np.zeros((Ntemplate*Nz, 2))
+        self.c_normal[key] = np.zeros((Ntemplate*Nz,))
+	Clims = np.zeros((len(self.filts),2))
+	for i in range(Ntemplate):
+	    for j in range(Nz):
+	        for k in range(len(self.filts)):
+	            Clims[k] = np.power(10.0, -5.0/2*self.maglims)*\
+	                       self.filter_norms[self.filts[k]]/\
+	    	               self.model_fluxes[key][i*Nz+j][k]
+	        self.Clims[key][i*Nz+j][0] = np.amin(Clims[:,0])
+		self.Clims[key][i*Nz+j][1] = np.amax(Clims[:,1])
+	        self.c_normal[key][i*Nz+j] = quad(self.Cz_prior,\
+		                             self.Clims[key][i*Nz+j][0],\
+		                             self.Clims[key][i*Nz+j][1],\
+		 			     args=(key, i*Nz,j))[0]
 
     def fixed_c_marginalization(self):
-    """
-    Marginalize over fixed priors for C's
-    """
+        """
+        Marginalize over fixed priors for C's
+        """
         self.abs_mags = {}
+	self.Clims = {}
+	self.c_normal = {}
+	self.zgrid = {}
+        self.coeff_marg_like = {}
         for i in range(self.Nclasses):
             Nz = self.Nzs[i]
-            if Nz == 1:
-                continue
             key = self.class_labels[i]
+	    print "\nMarginalizing for class " + key
             self.abs_mags[key] = np.zeros(self.model_mags[key].shape)
             Nmodel = self.model_fluxes[key].shape[0]
+            self.coeff_marg_like[key] = np.zeros((self.Ndata, Nmodel))
 	    Ntemplate = Nmodel/Nz
-            zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
-            idx = (np.abs(zgrid-self.zref[i])).argmin()
-	    for j in range(Ntemplate):
-	        for k in range(Nz):
-                    factor = self.coeffs[key][j*Nz+k]*(self.D[k]/1.0e-5)**2/\
-		             self.coeffs[key][j*Nz+idx]
-		    self.abs_mags[key][j*Nz+k] = self.model_mags[key][j*Nz+k]\
-		                                 -2.5*np.log10(factor)
-		    self.lum_func(key, self.abs_mags[key])
+            if Nz == 1:
+	        assert key == 'star'
+		print "\nInitializing star C priors"
+	        self.init_Cstarpriors(key, Ntemplate)
+		print "\nComputing C's marginalized likelihoods for stars"
+       	        for j in range(Ntemplate):
+		    print "Template {0}".format(j)
+		    for n in range(self.Ndata):
+		        self.coeff_marg_like[key][n,j] =\
+			                  self.marginalize(self.star_margin_func,\
+		                          self.Clims[key][j][0],\
+		                          self.Clims[key][j][1],\
+		 	         	  args=(key,n,j))
+	    else:
+                self.zgrid[key] = np.linspace(1.e-4, self.z_maxs[i], Nz)
+		print "\nInitializing {0} C priors".format(key)
+	        self.init_Czpriors(key, Ntemplate, Nz)
+		print "\nComputing C's marginalized likelihoods for {0}".format(key)
+       	        for j in range(Ntemplate):
+	            for k in range(Nz):
+		        for n in range(self.Ndata):
+		            self.coeff_marg_like[key][n,j*Nz+k] =\
+			                         self.marginalize(self.z_margin_func,\
+		                                 self.Clims[key][j*Nz+k][0],\
+		                                 self.Clims[key][j*Nz+k][1],\
+		 			         args=(key,n,j*Nz,k))
 
     def apply_and_marg_redshift_prior(self):
         """
@@ -423,7 +569,7 @@ class HBsep(object):
             Nmodel = self.model_fluxes[key].shape[0]
             Ntemplate = Nmodel/Nz
 
-            if Nz == 1:
+            if Nz == 1 or self.method == 2:
                 self.zc_marg_like[key] = self.coeff_marg_like[key]
                 continue
             zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
@@ -588,8 +734,11 @@ class HBsep(object):
             p0 = self.init_hyperparms(z_median, z_pow)
 
         if self.method == 2:
-	    self.init_D_grid()
+	    print "Initializing redshift and comoving measures grid"
+	    self.init_D_dVc_grid()
+	    print "Marginalizing over C's"
 	    self.fixed_c_marginalization()
+	    self.apply_and_marg_redshift_prior()
 
         bounds = self.init_hyperparm_bounds()
 
@@ -615,13 +764,13 @@ class HBsep(object):
 
     def write_fits_table(self, filename, data, labels):
         """
-        Write a FITS data table to given `filename` usings `labels` for 
+        Write a FITS data table to given `filename` usings `labels` for
         column names.
         """
         Nlabels = len(labels)
         if Nlabels > 1:
             cols = pf.ColDefs([pf.Column(name=labels[i], format='E',
-                                         array=data[:, i]) 
+                                         array=data[:, i])
                                for i in range(Nlabels)])
         else:
             cols = pf.ColDefs([pf.Column(name=labels[0], format='E',
