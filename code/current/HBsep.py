@@ -422,19 +422,25 @@ class HBsep(object):
 
     def Cz_prior(self, C, key, idx, zidx):
         ref = (np.abs(self.zgrid[key]-self.zrefs[key])).argmin()
-        M = C*np.power(self.D[key][zidx]*(1+self.zgrid[key][zidx])/1.0e-5, 2)\
-	   *self.model_fluxes[key][idx+ref]/self.filter_norms
-	M = -2.5*np.log10(M)
 	if key == 'galaxy':
-	    Phi = Phi_gal(M[2], band='r') # Use r-band
+            M = C*np.power(self.D[key][zidx]*(1+self.zgrid[key][zidx])/1.0e-5, 2)\
+	        *self.model_fluxes[key][idx+ref][2]/self.filter_norms[2]
+	    M = -2.5*np.log10(M)
+	    Phi = Phi_gal(M, band='r') # Use r-band
 	elif key == 'qso':
-	    Phi = Phi_qso(M[3], self.zgrid[key][zidx], band='i') # Use i-band
+            M = C*np.power(self.D[key][zidx]*(1+self.zgrid[key][zidx])/1.0e-5, 2)\
+	        *self.model_fluxes[key][idx+ref][3]/self.filter_norms[3]
+	    M = -2.5*np.log10(M)
+	    Phi = Phi_qso(M, self.zgrid[key][zidx], band='i') # Use i-band
 	return Phi/C*self.dVc[key][zidx]
 
     def Chisqrd(self, n, m, C, key):
-        temp = (self.fluxes[n]-C*self.model_fluxes[key][m])/self.flux_errors[n]
-	temp = np.power(temp, 2)
-	chisqrd = np.sum(temp)
+        chisqrd = 0.0
+        for i in range(self.Nfilter):
+            temp = (self.fluxes[n][i]-C*self.model_fluxes[key][m][i])\
+	           /self.flux_errors[n][i]
+	    temp = np.power(temp, 2)
+	    chisqrd += temp
 	return chisqrd
 
     def data_lkhood(self, n, m, C, key):
@@ -460,13 +466,12 @@ class HBsep(object):
 	x = np.exp(lnx)
 	y = np.zeros(x.shape)
 	n_args = len(args)
-	for i in range(len(x)):
-	    if n_args == 2:
-	        y[i] = func(x[i], args[0], args[1])
-	    elif n_args == 3:
-	        y[i] = func(x[i], args[0], args[1], args[2])
-	    elif n_args == 4:
-	        y[i] = func(x[i], args[0], args[1], args[2], args[3])
+        if n_args == 2:
+            y = func(x, args[0], args[1])
+	elif n_args == 3:
+	    y = func(x, args[0], args[1], args[2])
+	elif n_args == 4:
+	    y = func(x, args[0], args[1], args[2], args[3])
 	#plt.figure()
 	#plt.xlabel("C")
 	#plt.ylabel("Likelihood times Prior")
