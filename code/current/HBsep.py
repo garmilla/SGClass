@@ -46,6 +46,7 @@ class HBsep(object):
         self.z_min = z_min
 	self.method = method
 	self.num = 1001
+	self.amp_fac = 1.0
 
         if z_maxs is None:
             self.z_maxs = np.zeros(len(Nzs))
@@ -117,7 +118,7 @@ class HBsep(object):
                                 zmax, filt_norm_p, models_p)
 
     def create_models(self, filter_list_path, list_of_sed_list_paths,
-                      normalize_models=True):
+                      normalize_models=False):
         """
         For each class, produce models over redshifts
         """
@@ -150,13 +151,13 @@ class HBsep(object):
                               self.model_fluxes[key])
 
             # remove models with zero fluxes
-            #hasZero = np.any(self.model_fluxes[key] == 0.0, axis=1)
-	    #remove = np.where(hasZero)[0]
-	    #if len(remove) > 0:
-	    #    self.model_fluxes[key] = np.delete(self.model_fluxes[key], remove, axis=0)
+            hasZero = np.any(self.model_fluxes[key] == 0.0, axis=1)
+	    remove = np.where(hasZero)[0]
+	    if len(remove) > 0:
+	        self.model_fluxes[key] = np.delete(self.model_fluxes[key], remove, axis=0)
 
 	    # change zeros for floor to avoid problems
-	    zero_to_floor(self.model_fluxes[key])
+	    # zero_to_floor(self.model_fluxes[key])
 
             # normalize models
             if normalize_models:
@@ -173,7 +174,7 @@ class HBsep(object):
                               missing_mags=None,
                               limiting_mags=None,
                               limiting_sigmas=None,
-                              normalize_flux=True,
+                              normalize_flux=False,
                               inflation_factor=1e6):
         """
         Read in data location, process.
@@ -239,8 +240,8 @@ class HBsep(object):
             assert False, 'Must run make_model or get_filter_norm'
 
         # normal flux calculation
-        self.fluxes = 10.0 ** (-0.4 * self.mags) * self.filter_norms[None, :]
-        self.flux_errors = 10.0 ** (-0.4 * self.mags) * \
+        self.fluxes = np.power(10.0, -0.4*self.mags) * self.filter_norms[None, :]
+        self.flux_errors = np.power(10.0, -0.4*self.mags) * \
             self.filter_norms[None, :] * np.log(10.0) * 0.4 * self.mag_errors
 
         # account for missing data
@@ -445,26 +446,23 @@ class HBsep(object):
 
     def data_lkhood(self, n, m, C, key):
         log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
-	             - 0.5*self.Chisqrd(n, m, C, key)
+	             - 0.5*self.Chisqrd(n, m, C, key) + np.log(self.amp_fac)
 	return np.exp(log_lkhood)
 
     def star_margin_func(self, C, key, n, m):
         margin_func = self.data_lkhood(n,m,C,key)*\
-                      self.Cstar_prior(C,key,m)/\
-                      self.c_normal[key][m]
+	              self.CPriors[key][m]
         return margin_func
 
     def z_margin_func(self, C, key, n, idx, zidx):
         m = idx+zidx
         margin_func = self.data_lkhood(n,m,C,key)*\
-                      self.Cz_prior(C,key,idx,zidx)/\
-                      self.c_normal[key][m]
+	              self.CPriors[key][m]
         return margin_func
 
     def marginalize(self, func, a, b, args=()):
         lnx = np.linspace(np.log(a), np.log(b), num=self.num)
 	x = np.exp(lnx)
-	y = np.zeros(x.shape)
 	n_args = len(args)
         if n_args == 2:
             y = func(x, args[0], args[1])
@@ -472,11 +470,6 @@ class HBsep(object):
 	    y = func(x, args[0], args[1], args[2])
 	elif n_args == 4:
 	    y = func(x, args[0], args[1], args[2], args[3])
-	#plt.figure()
-	#plt.xlabel("C")
-	#plt.ylabel("Likelihood times Prior")
-	#plt.semilogx(x, y)
-	#plt.show()
 	integral = simps(y*x, lnx)
 	#dx = x[1]-x[0]
 	#integral = np.sum(y*dx)
@@ -488,18 +481,36 @@ class HBsep(object):
         """
         self.Clims[key] = np.zeros((Ntemplate, 2))
         self.c_normal[key] = np.zeros((Ntemplate,))
+        self.CPriors[key] = np.zeros((Ntemplate,self.num))
 	Clims = np.zeros((len(self.filts),2))
 	for i in range(Ntemplate):
 	    for j in range(len(self.filts)):
-	        Clims[j] = np.power(10.0, -5.0/2*self.maglims)*\
+	        Clims[j] = np.power(10.0, -0.4*self.maglims)*\
 	                   self.filter_norms[self.filts[j]]/\
-	    	           self.model_fluxes[key][i][j]
-	    self.Clims[key][i][0] = np.amin(Clims[:,0])
-	    self.Clims[key][i][1] = np.amax(Clims[:,1])
-	    self.c_normal[key][i] = quad(self.Cstar_prior,\
+	    	           self.model_fluxes[key][i][self.filts[j]]
+	    Cmin = np.amin(Clims[:,0])
+	    Cmax = np.amax(Clims[:,1])
+	    Cstar = np.exp(0.5*(np.log(Cmin)+np.log(Cmax)))
+	    self.model_fluxes[key][i] *= Cstar
+	    self.kms[i] /= Cstar
+	    self.Clims[key][i][0] = Cmin/Cstar
+	    self.Clims[key][i][1] = Cmax/Cstar
+	    self.c_normal[key][i] = romberg(self.Cstar_prior,\
 	                            self.Clims[key][i][0],\
 	                            self.Clims[key][i][1],\
-	     			    args=(key, i))[0]
+	     			    args=(key, i))
+            lnx = np.linspace(np.log(self.Clims[key][i][0]),\
+	                      np.log(self.Clims[key][i][1]),\
+			      num=self.num)
+	    x = np.exp(lnx)
+	    if self.c_normal[key][i] > 0.0:
+                self.CPriors[key][i] = self.Cstar_prior(x,key,i)/\
+                                       self.c_normal[key][i]
+	    else:
+                self.CPriors[key][i] = np.zeros(x.shape)
+	    if np.any(np.isnan(self.CPriors[key][i])):
+	        print "Model {0} has a NaN".format(i)
+
 
     def init_Czpriors(self, key, Ntemplate, Nz):
         """
@@ -507,36 +518,54 @@ class HBsep(object):
         """
         self.Clims[key] = np.zeros((Ntemplate*Nz, 2))
         self.c_normal[key] = np.zeros((Ntemplate*Nz,))
+        self.CPriors[key] = np.zeros((Ntemplate*Nz,self.num))
 	Clims = np.zeros((len(self.filts),2))
 	for i in range(Ntemplate):
 	    for j in range(Nz):
 	        for k in range(len(self.filts)):
-	            Clims[k] = np.power(10.0, -5.0/2*self.maglims)*\
+	            Clims[k] = np.power(10.0, -0.4*self.maglims)*\
 	                       self.filter_norms[self.filts[k]]/\
-	    	               self.model_fluxes[key][i*Nz+j][k]
-	        self.Clims[key][i*Nz+j][0] = np.amin(Clims[:,0])
-		self.Clims[key][i*Nz+j][1] = np.amax(Clims[:,1])
-	        self.c_normal[key][i*Nz+j] = quad(self.Cz_prior,\
+	    	               self.model_fluxes[key][i*Nz+j][self.filts[k]]
+	        Cmin = np.amin(Clims[:,0])
+	        Cmax = np.amax(Clims[:,1])
+	        Cstar = np.exp(0.5*(np.log(Cmin)+np.log(Cmax)))
+	        self.model_fluxes[key][i*Nz+j] *= Cstar
+	        self.Clims[key][i*Nz+j][0] = Cmin/Cstar
+	        self.Clims[key][i*Nz+j][1] = Cmax/Cstar
+		if np.any(np.isnan(self.Clims[key][i*Nz+j])):
+		    print Cstar, Cmin, Cmax
+	        self.c_normal[key][i*Nz+j] = romberg(self.Cz_prior,\
 		                             self.Clims[key][i*Nz+j][0],\
 		                             self.Clims[key][i*Nz+j][1],\
-		 			     args=(key, i*Nz,j))[0]
+		 			     args=(key, i*Nz,j))
+                lnx = np.linspace(np.log(self.Clims[key][i*Nz+j][0]),\
+	                          np.log(self.Clims[key][i*Nz+j][1]),\
+			          num=self.num)
+	        x = np.exp(lnx)
+	        if self.c_normal[key][i*Nz+j] > 0.0:
+                    self.CPriors[key][i*Nz+j] = self.Cz_prior(x,key,i*Nz,j)/\
+                                                self.c_normal[key][i*Nz+j]
+	        else:
+                    self.CPriors[key][i*Nz+j] = np.zeros(x.shape)
+	        if np.any(np.isnan(self.CPriors[key][i*Nz+j])):
+	            print "Model {0} at redshift {1} has a NaN".format(i,\
+		                                       self.zgrid[key][j])
 
     def fixed_c_marginalization(self, floor = 1.0e-100):
         """
         Marginalize over fixed priors for C's
         """
-        self.abs_mags = {}
 	self.Clims = {}
 	self.c_normal = {}
 	self.zgrid = {}
         self.coeff_marg_like = {}
         self.ignored = np.zeros(self.Ndata)
         self.bad_fit_flags = {}
+	self.CPriors = {}
         for i in range(self.Nclasses):
             Nz = self.Nzs[i]
             key = self.class_labels[i]
 	    print "\nMarginalizing for class " + key
-            self.abs_mags[key] = np.zeros(self.model_mags[key].shape)
             Nmodel = self.model_fluxes[key].shape[0]
             self.coeff_marg_like[key] = np.zeros((self.Ndata, Nmodel))
 	    Ntemplate = Nmodel/Nz
@@ -566,9 +595,13 @@ class HBsep(object):
 		                                 self.Clims[key][j*Nz+k][0],\
 		                                 self.Clims[key][j*Nz+k][1],\
 		 			         args=(key,n,j*Nz,k))
+            if np.any(np.isnan(self.coeff_marg_like[key])):
+	        print "\nNaN found in key={0}, in indexes".format(key)
+		#print np.where(np.isnan(self.coeff_marg_like[key]))
+
             # Flag bad fits
             self.bad_fit_flags[key] = np.zeros(self.Ndata)
-            ind = np.where(self.coeff_marg_like[key].sum(axis=1) < floor)[0]
+            ind = np.where(self.coeff_marg_like[key].sum(axis=1) == 0.0)[0]
             self.bad_fit_flags[key][ind] = 1
             self.ignored[ind] += 1
 
@@ -638,6 +671,7 @@ class HBsep(object):
 
         # assign template weights
         self.template_weights = {}
+	weights_sum = 0.0
         for i in range(self.Nclasses):
             key = self.class_labels[i]
             Ntemplate = np.int(self.model_fluxes[key].shape[0] / self.Nzs[i])
@@ -645,8 +679,11 @@ class HBsep(object):
                 np.exp(np.array(hyperparms[count:count+Ntemplate]))
 	    if self.template_weights[key].sum() == 0.0:
 	        print "self.template_weights[{0}].sum() is zero!".format(key)
-            self.template_weights[key] /= self.template_weights[key].sum()
+            weights_sum += self.template_weights[key].sum()
             count += Ntemplate
+	for i in range(self.Nclasses):
+            key = self.class_labels[i]
+	    self.template_weights[key] /= weights_sum
 
         # prior parms
         if self.method == 1:
@@ -667,11 +704,6 @@ class HBsep(object):
                 self.z_pow[key] = hyperparms[count:count+1]
                 count += 1
 
-        self.class_weights = np.exp(np.array(hyperparms[-self.Nclasses:]))
-	if self.class_weights.sum() == 0.0:
-	    print "self.class_weights.sum() is zero!"
-        self.class_weights /= self.class_weights.sum()
-
     def calc_neg_lnlike(self, floor=1e-100):
         """
         Calculate marginalized likelihoods.
@@ -686,10 +718,11 @@ class HBsep(object):
                 np.sum(self.zc_marg_like[key][ind] *
                        self.template_weights[key][None, :], axis=1)
 
-            self.marg_like += np.maximum(self.tzc_marg_like[key] *
-                                         self.class_weights[i], floor)
+            self.marg_like += np.maximum(self.tzc_marg_like[key], floor)
 
         self.neg_log_likelihood = -1.0 * np.sum(np.log(self.marg_like[ind]))
+	if np.isnan(self.neg_log_likelihood):
+	    print self.neg_log_likelihood
 
     def call_neg_lnlike(self, hyperparms):
         """
@@ -725,9 +758,6 @@ class HBsep(object):
         for i in range(self.Nclasses):
             if self.Nzs[i] != 1 and self.method == 1:
                 p0 = np.append(p0, z_pow[i])
-        for i in range(self.Nclasses):
-            p0 = np.append(p0, np.log(1./self.Nclasses))
-
         return p0
 
     def init_hyperparm_bounds(self):
@@ -748,9 +778,6 @@ class HBsep(object):
         for i in range(self.Nclasses):
             if self.Nzs[i] != 1 and self.method == 1:
                 bounds.extend([(0., 2.)])
-        for i in range(self.Nclasses):
-            bounds.extend([(-1.*np.Inf, np.Inf)])
-
         return bounds
 
     def optimize(self, z_median=None, z_pow=None, init_p0=None,
@@ -764,9 +791,9 @@ class HBsep(object):
             p0 = self.init_hyperparms(z_median, z_pow)
 
         if self.method == 2:
-	    print "Initializing redshift and comoving measures grid"
+	    print "\nInitializing redshift and comoving measures grid"
 	    self.init_D_dVc_grid()
-	    print "Marginalizing over C's"
+	    print "\nMarginalizing over C's"
 	    self.fixed_c_marginalization()
 	    self.apply_and_marg_redshift_prior()
 
@@ -786,9 +813,8 @@ class HBsep(object):
         relative_likelihoods = np.zeros((self.Ndata, self.Nclasses))
         for i in range(self.Nclasses):
             key = self.class_labels[i]
-            relative_likelihoods[:, i] = self.tzc_marg_like[key] * \
-                self.class_weights[i]
-
+            relative_likelihoods[:, i] = self.tzc_marg_like[key]*\
+                                         np.sum(self.template_weights[key])
         relative_likelihoods /= relative_likelihoods.sum(axis=1)[:, None]
         return relative_likelihoods
 
