@@ -32,6 +32,19 @@ def floor_to_zero(array, floor = 1.e-100):
     for i in change:
         array.ravel()[i] = 0.0
 
+class HBinit:
+    def _init_(self):
+        self.ra = None
+        self.dec = None
+        self.maglims = None
+	self.filts = None
+	self.class_labels = None
+	self.Nzs = None
+	self.z_maxs = None
+	self.z_min = 0.
+	self.method = 1
+	self.zrefs = None
+
 class HBsep(object):
     """
     Hierarchical Bayesian classification of astronomical
@@ -72,13 +85,18 @@ class HBsep(object):
 	    pc = 3.08567758e18 # Parsec in cm
 	    self.rsun = 8.0*1.0e3*pc #Distance from the sun to the galactic center
 
-    def get_filter_norm(self, filter_list_path):
+    def get_filter_norm(self, filter_list_path, filter_list_names):
         """
         Return the normalizing flux in AB for given
         filter list.
         """
         f = open(filter_list_path)
         self.Nfilter = len(f.readlines())
+        f.close
+        f = open(filter_list_names)
+	self.filter_names = f.readlines()
+	for i in range(self.Nfilter):
+	    self.filter_names[i] = self.filter_names[i][0:-1]
         f.close
         self._make_models(None, filter_list_path, 1, 0., 0.,
                           np.zeros((2, 2)).astype(np.float64), True)
@@ -127,13 +145,11 @@ class HBsep(object):
         f = open(filter_list_path)
         self.Nfilter = len(f.readlines())
         f.close
+	self.remove = {}
 
         for i in range(self.Nclasses):
             key = self.class_labels[i]
             sed_list_path = list_of_sed_list_paths[i]
-
-	    if key == 'star' and self.method == 2:
-	        self.kms = get_star_kms(sed_list_path)
 
             # get number of seds in class
             f = open(sed_list_path)
@@ -152,9 +168,10 @@ class HBsep(object):
 
             # remove models with zero fluxes
             hasZero = np.any(self.model_fluxes[key] == 0.0, axis=1)
-	    remove = np.where(hasZero)[0]
-	    if len(remove) > 0:
-	        self.model_fluxes[key] = np.delete(self.model_fluxes[key], remove, axis=0)
+	    self.remove[key] = np.where(hasZero)[0]
+	    if len(self.remove[key]) > 0:
+	        self.model_fluxes[key] = np.delete(self.model_fluxes[key],\
+		                         self.remove[key], axis=0)
 
 	    # change zeros for floor to avoid problems
 	    # zero_to_floor(self.model_fluxes[key])
@@ -168,7 +185,33 @@ class HBsep(object):
             self.model_mags[key] = -2.5 * np.log10(self.model_fluxes[key] /
                                                    self.filter_norms[None, :])
 
+	    if key == 'star' and self.method == 2:
+	        self.kms = self.get_star_kms(sed_list_path)
+
             print '\nCreated '+key+' models'
+
+    def get_star_kms(self, sed_list_path):
+        sed_files = np.loadtxt(sed_list_path, dtype="string")
+        sed_files = np.delete(sed_files,\
+		              self.remove['star'], axis=0)
+        kms = np.zeros(sed_files.shape)
+        (ibd, Lbd) = load_bd_luminosities(sed_files)
+        for i in range(len(ibd)):
+            sed = np.loadtxt(sed_files[ibd[i]])
+    	kms[ibd[i]] = Lbd[i]/(4*np.pi*cumtrapz(sed[:,1], sed[:,0])[-1])
+        pickles_dic = load_pickles_dic()
+        for (i, sed_file) in enumerate(sed_files):
+            if 'PICKLES' in sed_file:
+    	        Lum = pickles_lum(sed_file, pickles_dic)
+            elif 'WD' in sed_file:
+    	        Lum = wd_lum(sed_file)
+    	    elif 'castelli' in sed_file:
+    	        Lum = juric_lum_func(sed_file, self.model_mags['star'][i], self.filter_names)
+    	    else:
+    	        continue
+            sed = np.loadtxt(sed_file)
+    	    kms[i] = Lum/(4*np.pi*cumtrapz(sed[:,1], sed[:,0])[-1])
+        return kms
 
     def read_and_process_data(self, data,
                               missing_mags=None,
@@ -424,13 +467,15 @@ class HBsep(object):
     def Cz_prior(self, C, key, idx, zidx):
         ref = (np.abs(self.zgrid[key]-self.zrefs[key])).argmin()
 	if key == 'galaxy':
+	    ridx = self.filter_names.index('r')
             M = C*np.power(self.D[key][zidx]*(1+self.zgrid[key][zidx])/1.0e-5, 2)\
-	        *self.model_fluxes[key][idx+ref][2]/self.filter_norms[2]
+	        *self.model_fluxes[key][idx+ref][ridx]/self.filter_norms[ridx]
 	    M = -2.5*np.log10(M)
 	    Phi = Phi_gal(M, band='r') # Use r-band
 	elif key == 'qso':
+	    iidx = self.filter_names.index('i')
             M = C*np.power(self.D[key][zidx]*(1+self.zgrid[key][zidx])/1.0e-5, 2)\
-	        *self.model_fluxes[key][idx+ref][3]/self.filter_norms[3]
+	        *self.model_fluxes[key][idx+ref][iidx]/self.filter_norms[iidx]
 	    M = -2.5*np.log10(M)
 	    Phi = Phi_qso(M, self.zgrid[key][zidx], band='i') # Use i-band
 	return Phi/C*self.dVc[key][zidx]
