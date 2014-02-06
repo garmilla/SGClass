@@ -5,6 +5,7 @@ from scipy.interpolate import griddata
 
 Lsun = 3.839e33
 Lvega = 40.12*Lsun
+pc = 3.08567758e18 # Parsec in cm
 
 def Phi_gal(M, band='r'):
     h = 0.6932
@@ -64,6 +65,16 @@ def Phi_qso(M, z, band='i'):
     mu = M - (Mstar + B1*xi + B2*xi**2 + B3*xi**3)
     Phi = Phistar*np.power(10.0, mu*(A1+A2*(z-2.45)))
     return Phi
+
+def juric_lum_func(sed_file, mags, filt_names):
+    ridx = filt_names.index('r')
+    iidx = filt_names.index('i')
+    ri = mags[ridx] - mags[iidx]
+    Mr = 4.0 + 11.86*ri - 10.74*ri**2 + 5.99*ri**3 - 1.20*ri**4
+    C =  np.power(10.0, -0.4*(Mr - mags[ridx]))
+    sed = np.loadtxt(sed_file)
+    L = 4*np.pi*(10*pc)**2*C*cumtrapz(sed[:,0], sed[:,1])[-1]
+    return L
 
 def load_pickles_dic():
     table2 = np.loadtxt('pickles_lum.txt', dtype='string')
@@ -140,22 +151,3 @@ def load_bd_luminosities(sed_files):
     L = np.concatenate((L_dusty, L_cond, L_NextGen))
     index = np.concatenate((index_dusty, index_cond, index_NextGen))
     return (index, L)
-
-def get_star_kms(sed_list_path):
-    sed_files = np.loadtxt(sed_list_path, dtype="string")
-    kms = np.zeros(sed_files.shape)
-    (ibd, Lbd) = load_bd_luminosities(sed_files)
-    for i in range(len(ibd)):
-        sed = np.loadtxt(sed_files[ibd[i]])
-	kms[ibd[i]] = Lbd[i]/(4*np.pi*cumtrapz(sed[:,1], sed[:,0])[-1])
-    pickles_dic = load_pickles_dic()
-    for (i, sed_file) in enumerate(sed_files):
-        if 'PICKLES' in sed_file:
-	    Lum = pickles_lum(sed_file, pickles_dic)
-        elif 'WD' in sed_file:
-	    Lum = wd_lum(sed_file)
-	else:
-	    continue
-        sed = np.loadtxt(sed_file)
-	kms[i] = Lum/(4*np.pi*cumtrapz(sed[:,1], sed[:,0])[-1])
-    return kms
