@@ -128,3 +128,55 @@ def eq2gal(ra,dec):
     l = l % (2.0 * np.pi)
 
     return l, b
+
+def csv_to_txt(Ifname, output_bands):
+    Ofname = Ifname[:-3]
+    Ofname += 'txt'
+    
+    bands = []
+    bands_ind = []
+    output_bands_ind = []
+    bands_err_ind = []
+    output_bands_err_ind = []
+    with open(Ifname, 'r') as If:
+        reader = csv.reader(If)
+        line = reader.next()
+        if 'u' in line:
+    	    bands.append('u')
+            bands_ind.append(line.index('u'))
+            bands_err_ind.append(line.index('err_u'))
+        if 'g' in line:
+    	    bands.append('g')
+            bands_ind.append(line.index('g'))
+            bands_err_ind.append(line.index('err_g'))
+        if 'r' in line:
+    	    bands.append('r')
+            bands_ind.append(line.index('r'))
+            bands_err_ind.append(line.index('err_r'))
+        if 'i' in line:
+    	    bands.append('i')
+            bands_ind.append(line.index('i'))
+            bands_err_ind.append(line.index('err_i'))
+        if 'z' in line:
+       	    bands.append('z')
+            bands_ind.append(line.index('z'))
+            bands_err_ind.append(line.index('err_z'))
+        Nfilters = len(bands_ind)
+        for band in output_bands:
+            if band not in bands:
+    	        print "Error: The output band {0} was not found in the data".format(band)
+    	        sys.exit(1)
+    	output_bands_ind.append(bands_ind[bands.index(band)])
+    	output_bands_err_ind.append(bands_err_ind[bands.index(band)])
+        print "Data for bands:", bands
+        print "Output data for bands:", output_bands
+        with open(Ofname, 'w') as Of:
+            for line in reader:
+    	        data_line = ''
+    	    for i in output_bands_ind:
+    	        data_line += line[i] + ' '
+    	    for i in output_bands_err_ind:
+    	        data_line += line[i] + ' '
+    	    data_line = data_line[:-1]
+    	    data_line += '\n'
+    	    Of.write(data_line)
