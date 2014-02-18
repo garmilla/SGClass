@@ -50,7 +50,8 @@ class HBsep(object):
     Hierarchical Bayesian classification of astronomical
     objects, using photometry.
     """
-    def __init__(self, ra, dec, maglims, filts, class_labels, Nzs, z_maxs=None, z_min=0., method=1, zrefs=None):
+    def __init__(self, ra, dec, maglims, filts, class_labels, Nzs, z_maxs=None, z_min=0., method=1,\
+                 zrefs=None, fuzz=0.5, fuzz_fac=0.9):
 
 	self.l, self.b = eq2gal(ra,dec)
 	self.maglims = maglims
@@ -60,6 +61,8 @@ class HBsep(object):
 	self.method = method
 	self.num = 1001
 	self.amp_fac = 1.0
+	self.fuzz=fuzz
+	self.fuzz_fac=fuzz_fac
 
         if z_maxs is None:
             self.z_maxs = np.zeros(len(Nzs))
@@ -184,6 +187,7 @@ class HBsep(object):
             # compute magnitudes
             self.model_mags[key] = -2.5 * np.log10(self.model_fluxes[key] /
                                                    self.filter_norms[None, :])
+
 
 	    if key == 'star' and self.method == 2:
 	        self.kms = self.get_star_kms(sed_list_path)
@@ -480,22 +484,46 @@ class HBsep(object):
 	    Phi = Phi_qso(M, self.zgrid[key][zidx], band='i') # Use i-band
 	return Phi/C*self.dVc[key][zidx]
 
-    def Chisqrd(self, n, m, C, key):
+    def Chisqrd(self, n, m, C, key, fuzz=False):
+        if fuzz:
+	    v = self.mags[n][:,None] - \
+	        (self.model_mags[key][m][:,None] - 2.5*np.log10(C))
+	    v = v*np.minimum(self.fuzz/np.sqrt(np.sum(np.power(v, 2), axis=0)), self.fuzz_fac)
+	    model_mags = (self.model_mags[key][m][:,None] - 2.5*np.log10(C)) + v
+            model_fluxes = np.power(10.0, -0.4*model_mags)*self.filter_norms[:,None]
+	    #print "C", C
+	    #print "Filter norms", self.filter_norms[:,None]
+	    #print "v=", v
+	    #print "Mags before:", self.model_mags[key][m][:,None] - 2.5*np.log10(C)
+	    #print "MbfFb:", -2.5*np.log10(self.model_fluxes[key][m][:,None]/self.filter_norms[:,None])
+	    #print "Fluxes before:", self.model_fluxes[key][m][:,None]
+	    #print "Mags after:", model_mags
+	    #print "Fluxes after:", model_fluxes
+	else:
+	    model_fluxes = C*self.model_fluxes[key][m][:,None]
         chisqrd = 0.0
         for i in range(self.Nfilter):
-            temp = (self.fluxes[n][i]-C*self.model_fluxes[key][m][i])\
+            temp = (self.fluxes[n][i]-model_fluxes[i])\
 	           /self.flux_errors[n][i]
 	    temp = np.power(temp, 2)
 	    chisqrd += temp
 	return chisqrd
 
-    def data_lkhood(self, n, m, C, key):
-        log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
-	             - 0.5*self.Chisqrd(n, m, C, key) + np.log(self.amp_fac)
+    def data_lkhood(self, n, m, C, key, fuzz=False):
+        if fuzz:
+            log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
+	                 - 0.5*self.Chisqrd(n, m, C, key, fuzz=True) + np.log(self.amp_fac)
+	    #print "With blurr: log_lkhood=", log_lkhood
+            log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
+	                 - 0.5*self.Chisqrd(n, m, C, key) + np.log(self.amp_fac)
+	    #print "Without blurr: log_lkhood=", log_lkhood
+	else:
+            log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
+	                 - 0.5*self.Chisqrd(n, m, C, key) + np.log(self.amp_fac)
 	return np.exp(log_lkhood)
 
     def star_margin_func(self, C, key, n, m):
-        margin_func = self.data_lkhood(n,m,C,key)*\
+        margin_func = self.data_lkhood(n,m,C,key,fuzz=True)*\
 	              self.CPriors[key][m]
         return margin_func
 
@@ -537,6 +565,7 @@ class HBsep(object):
 	    Cmax = np.amax(Clims[:,1])
 	    Cstar = np.exp(0.5*(np.log(Cmin)+np.log(Cmax)))
 	    self.model_fluxes[key][i] *= Cstar
+	    self.model_mags[key][i] -= 2.5*np.log10(Cstar)
 	    self.kms[i] /= Cstar
 	    self.Clims[key][i][0] = Cmin/Cstar
 	    self.Clims[key][i][1] = Cmax/Cstar
@@ -575,6 +604,7 @@ class HBsep(object):
 	        Cmax = np.amax(Clims[:,1])
 	        Cstar = np.exp(0.5*(np.log(Cmin)+np.log(Cmax)))
 	        self.model_fluxes[key][i*Nz+j] *= Cstar
+	        self.model_mags[key][i*Nz+j] -= 2.5*np.log10(Cstar)
 	        self.Clims[key][i*Nz+j][0] = Cmin/Cstar
 	        self.Clims[key][i*Nz+j][1] = Cmax/Cstar
 		if np.any(np.isnan(self.Clims[key][i*Nz+j])):
