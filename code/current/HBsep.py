@@ -1,7 +1,8 @@
 # Author - Ross Fadely
 #
 import numpy as np
-np.seterr(all='warn')
+np.seterr(all='raise')
+np.seterr(under='warn')
 #np.seterr(divide='ignore')
 import ctypes as ct
 import pyfits as pf
@@ -32,45 +33,29 @@ def floor_to_zero(array, floor = 1.e-100):
     for i in change:
         array.ravel()[i] = 0.0
 
-class HBinit:
-    def _init_(self):
-        self.ra = None
-        self.dec = None
-        self.maglims = None
-	self.filts = None
-	self.class_labels = None
-	self.Nzs = None
-	self.z_maxs = None
-	self.z_min = 0.
-	self.method = 1
-	self.zrefs = None
+def write_filt_files(filters, f_files='filter_list_path', f_names='filter_list_names',\
+                     bands=['u', 'g', 'r', 'i', 'z', 'y']):
+    f_files = open(f_files, 'w')
+    f_names = open(f_names, 'w')
+    for band in bands:
+        if band in filters:
+            f_files.write(filters[band] + '\n')
+            f_names.write(band + '\n')
+    f_files.close()
+    f_names.close()
+        
 
 class HBsep(object):
     """
     Hierarchical Bayesian classification of astronomical
     objects, using photometry.
     """
-    def __init__(self, ra, dec, maglims, filts, class_labels, Nzs, z_maxs=None, z_min=0., method=1,\
-                 zrefs=None, fuzz=0.5, fuzz_fac=0.9):
+    def __init__(self):
+	execfile('config.py')
+	write_filt_files(self.filters)
+	self.l, self.b = eq2gal(self.ra, self.dec)
 
-	self.l, self.b = eq2gal(ra,dec)
-	self.maglims = maglims
-	self.filts = filts
-        self.Nzs = Nzs
-        self.z_min = z_min
-	self.method = method
-	self.num = 1001
-	self.amp_fac = 1.0
-	self.fuzz=fuzz
-	self.fuzz_fac=fuzz_fac
-
-        if z_maxs is None:
-            self.z_maxs = np.zeros(len(Nzs))
-        else:
-            self.z_maxs = z_maxs
-
-        self.class_labels = class_labels
-        self.Nclasses = len(class_labels)
+        self.Nclasses = len(self.classes)
 
         self.model_mags = {}
         self.model_fluxes = {}
@@ -83,8 +68,9 @@ class HBsep(object):
 	    # Speed of light in km/s
             self.c = 3.0e5 # in km/s
 	    self.zrefs = {}
-	    for (i, c) in enumerate(class_labels):
-	        self.zrefs[c] = zrefs[i] # Reference redshifts, typically z_min
+	    for cls in self.classes:
+	        if cls.Nz != 1:
+	            self.zrefs[cls.label] = cls.z_ref # Reference redshifts, typically z_min
 	    pc = 3.08567758e18 # Parsec in cm
 	    self.rsun = 8.0*1.0e3*pc #Distance from the sun to the galactic center
 
@@ -110,7 +96,6 @@ class HBsep(object):
         Prepare for and call model maker.
         """
 
-        #pdb.set_trace()
         # load funtion
         model_maker = ct.CDLL('./_model_maker.so')
 
@@ -150,9 +135,9 @@ class HBsep(object):
         f.close
 	self.remove = {}
 
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
-            sed_list_path = list_of_sed_list_paths[i]
+        for cls in self.classes:
+            key = cls.label
+            sed_list_path = cls.path
 
             # get number of seds in class
             f = open(sed_list_path)
@@ -161,12 +146,12 @@ class HBsep(object):
 
             # init
             self.model_fluxes[key] = \
-                np.zeros((self.Nzs[i] * Nseds,
+                np.zeros((cls.Nz * Nseds,
                           self.Nfilter)).astype(np.float64)
 
             # make the models
-            self._make_models(sed_list_path, filter_list_path, self.Nzs[i],
-                              self.z_min, self.z_maxs[i],
+            self._make_models(sed_list_path, filter_list_path, cls.Nz,
+                              cls.z_min, cls.z_max,
                               self.model_fluxes[key])
 
             # remove models with zero fluxes
@@ -325,9 +310,8 @@ class HBsep(object):
         self.chi2s = {}
         self.coeffs = {}
         self.coefferrs = {}
-        for i in range(self.Nclasses):
-
-            key = self.class_labels[i]
+        for cls in self.classes:
+            key = cls.label
             Nmodel = self.model_fluxes[key].shape[0]
             self.chi2s[key] = np.zeros((self.Ndata, Nmodel))
             self.coeffs[key] = np.zeros((self.Ndata, Nmodel))
@@ -366,9 +350,8 @@ class HBsep(object):
         self.ignored = np.zeros(self.Ndata)
         self.bad_fit_flags = {}
         self.coeff_marg_like = {}
-        for i in range(self.Nclasses):
-
-            key = self.class_labels[i]
+        for cls in self.classes:
+            key = cls.label
             Nmodel = self.model_fluxes[key].shape[0]
             minchi2 = np.min(self.chi2s[key], axis=1)
             self.coeff_marg_like[key] = np.zeros((self.Ndata, Nmodel))
@@ -410,9 +393,8 @@ class HBsep(object):
         """
         self.coeff_prior_vars = {}
         self.coeff_prior_means = {}
-        for i in range(self.Nclasses):
-
-            key = self.class_labels[i]
+        for cls in self.classes:
+            key = cls.label
             coeffs = self.coeffs[key]
             weights = 1./self.coefferrs[key]
 
@@ -449,17 +431,17 @@ class HBsep(object):
         """
         self.D = {}
         self.dVc = {}
-        for i in range(self.Nclasses):
-            Nz = self.Nzs[i]
-            if Nz == 1:
+	self.zgrid = {}
+        for cls in self.classes:
+            if cls.Nz==1:
                 continue
-            key = self.class_labels[i]
-            zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
-	    self.D[key] = np.zeros((Nz,))
-	    self.dVc[key] = np.zeros((Nz,))
-	    for i in range(Nz):
-	        self.D[key][i] = self.get_D(zgrid[i])
-	        self.dVc[key][i] = self.get_dVc(zgrid[i], self.D[key][i])
+            key = cls.label
+            self.zgrid[key] = np.linspace(cls.z_min, cls.z_max, cls.Nz)
+	    self.D[key] = np.zeros((cls.Nz,))
+	    self.dVc[key] = np.zeros((cls.Nz,))
+	    for i in range(cls.Nz):
+	        self.D[key][i] = self.get_D(self.zgrid[key][i])
+	        self.dVc[key][i] = self.get_dVc(self.zgrid[key][i], self.D[key][i])
 
     def Cstar_prior(self, C, key, m):
         Prior = np.power(C, -5.0/2)/\
@@ -512,14 +494,14 @@ class HBsep(object):
     def data_lkhood(self, n, m, C, key, fuzz=False):
         if fuzz:
             log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
-	                 - 0.5*self.Chisqrd(n, m, C, key, fuzz=True) + np.log(self.amp_fac)
+	                 - 0.5*self.Chisqrd(n, m, C, key, fuzz=True)
 	    #print "With blurr: log_lkhood=", log_lkhood
             log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
-	                 - 0.5*self.Chisqrd(n, m, C, key) + np.log(self.amp_fac)
+	                 - 0.5*self.Chisqrd(n, m, C, key)
 	    #print "Without blurr: log_lkhood=", log_lkhood
 	else:
             log_lkhood = - np.sum(np.log(self.flux_errors[n]*2*np.sqrt(np.pi)))\
-	                 - 0.5*self.Chisqrd(n, m, C, key) + np.log(self.amp_fac)
+	                 - 0.5*self.Chisqrd(n, m, C, key)
 	return np.exp(log_lkhood)
 
     def star_margin_func(self, C, key, n, m):
@@ -555,14 +537,15 @@ class HBsep(object):
         self.Clims[key] = np.zeros((Ntemplate, 2))
         self.c_normal[key] = np.zeros((Ntemplate,))
         self.CPriors[key] = np.zeros((Ntemplate,self.num))
-	Clims = np.zeros((len(self.filts),2))
+	Clims = np.zeros((len(self.maglims),2))
 	for i in range(Ntemplate):
-	    for j in range(len(self.filts)):
-	        Clims[j] = np.power(10.0, -0.4*self.maglims)*\
-	                   self.filter_norms[self.filts[j]]/\
-	    	           self.model_fluxes[key][i][self.filts[j]]
-	    Cmin = np.amin(Clims[:,0])
-	    Cmax = np.amax(Clims[:,1])
+	    for (j, band) in enumerate(self.maglims):
+	        idx = self.filter_names.index(band)
+	        Clims[j] = np.power(10.0, -0.4*self.maglims[band])*\
+	                   self.filter_norms[idx]/\
+	    	           self.model_fluxes[key][i][idx]
+	    Cmin = np.amin(Clims[:,1])
+	    Cmax = np.amax(Clims[:,0])
 	    Cstar = np.exp(0.5*(np.log(Cmin)+np.log(Cmax)))
 	    self.model_fluxes[key][i] *= Cstar
 	    self.model_mags[key][i] -= 2.5*np.log10(Cstar)
@@ -593,15 +576,16 @@ class HBsep(object):
         self.Clims[key] = np.zeros((Ntemplate*Nz, 2))
         self.c_normal[key] = np.zeros((Ntemplate*Nz,))
         self.CPriors[key] = np.zeros((Ntemplate*Nz,self.num))
-	Clims = np.zeros((len(self.filts),2))
+	Clims = np.zeros((len(self.maglims),2))
 	for i in range(Ntemplate):
 	    for j in range(Nz):
-	        for k in range(len(self.filts)):
-	            Clims[k] = np.power(10.0, -0.4*self.maglims)*\
-	                       self.filter_norms[self.filts[k]]/\
-	    	               self.model_fluxes[key][i*Nz+j][self.filts[k]]
-	        Cmin = np.amin(Clims[:,0])
-	        Cmax = np.amax(Clims[:,1])
+	        for (k, band) in enumerate(self.maglims):
+		    idx = self.filter_names.index(band)
+	            Clims[k] = np.power(10.0, -0.4*self.maglims[band])*\
+	                       self.filter_norms[idx]/\
+	    	               self.model_fluxes[key][i*Nz+j][idx]
+	        Cmin = np.amin(Clims[:,1])
+	        Cmax = np.amax(Clims[:,0])
 	        Cstar = np.exp(0.5*(np.log(Cmin)+np.log(Cmax)))
 	        self.model_fluxes[key][i*Nz+j] *= Cstar
 	        self.model_mags[key][i*Nz+j] -= 2.5*np.log10(Cstar)
@@ -632,19 +616,17 @@ class HBsep(object):
         """
 	self.Clims = {}
 	self.c_normal = {}
-	self.zgrid = {}
         self.coeff_marg_like = {}
         self.ignored = np.zeros(self.Ndata)
         self.bad_fit_flags = {}
 	self.CPriors = {}
-        for i in range(self.Nclasses):
-            Nz = self.Nzs[i]
-            key = self.class_labels[i]
+        for cls in self.classes:
+            key = cls.label
 	    print "\nMarginalizing for class " + key
             Nmodel = self.model_fluxes[key].shape[0]
             self.coeff_marg_like[key] = np.zeros((self.Ndata, Nmodel))
-	    Ntemplate = Nmodel/Nz
-            if Nz == 1:
+	    Ntemplate = Nmodel/cls.Nz
+            if cls.Nz==1:
 	        assert key == 'star'
 		print "\nInitializing star C priors"
 	        self.init_Cstarpriors(key, Ntemplate)
@@ -658,18 +640,17 @@ class HBsep(object):
 		                          self.Clims[key][j][1],\
 		 	         	  args=(key,n,j))
 	    else:
-                self.zgrid[key] = np.linspace(1.e-4, self.z_maxs[i], Nz)
 		print "\nInitializing {0} C priors".format(key)
-	        self.init_Czpriors(key, Ntemplate, Nz)
+	        self.init_Czpriors(key, Ntemplate, cls.Nz)
 		print "\nComputing C's marginalized likelihoods for {0}".format(key)
        	        for j in range(Ntemplate):
-	            for k in range(Nz):
+	            for k in range(cls.Nz):
 		        for n in range(self.Ndata):
-		            self.coeff_marg_like[key][n,j*Nz+k] =\
+		            self.coeff_marg_like[key][n,j*cls.Nz+k] =\
 			                         self.marginalize(self.z_margin_func,\
-		                                 self.Clims[key][j*Nz+k][0],\
-		                                 self.Clims[key][j*Nz+k][1],\
-		 			         args=(key,n,j*Nz,k))
+		                                 self.Clims[key][j*cls.Nz+k][0],\
+		                                 self.Clims[key][j*cls.Nz+k][1],\
+		 			         args=(key,n,j*cls.Nz,k))
             if np.any(np.isnan(self.coeff_marg_like[key])):
 	        print "\nNaN found in key={0}, in indexes".format(key)
 		#print np.where(np.isnan(self.coeff_marg_like[key]))
@@ -691,14 +672,12 @@ class HBsep(object):
         Apply redshift prior and margninalize over redshift
         """
         self.zc_marg_like = {}
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
-
-            Nz = self.Nzs[i]
+        for cls in self.classes:
+            key = cls.label
             Nmodel = self.model_fluxes[key].shape[0]
-            Ntemplate = Nmodel/Nz
+            Ntemplate = Nmodel/cls.Nz
 
-            if Nz == 1:
+            if cls.Nz==1:
                 self.zc_marg_like[key] = self.coeff_marg_like[key]
                 continue
 
@@ -707,10 +686,8 @@ class HBsep(object):
 		for n in range(self.Ndata):
                     for j in range(Ntemplate):
                         self.zc_marg_like[key][n][j] =\
-                             np.sum(self.coeff_marg_like[key][n][Nz*j:Nz*(j+1)])
+                             np.sum(self.coeff_marg_like[key][n][cls.Nz*j:cls.Nz*(j+1)])
                 continue
-
-            zgrid = np.linspace(1.e-4, self.z_maxs[i], Nz)
 
             self.zc_marg_like[key] = np.zeros((self.Ndata, Ntemplate))
             if self.method == 1:
@@ -719,17 +696,11 @@ class HBsep(object):
                                       for zmed in self.z_medians[key]])
 		if np.any(z_medians == 0.0):
 		    print "z_medians is zero!"
-		#with open('z_medians.pkl', 'w') as f:
-		#    pickle.dump(z_medians, f)
-		#with open('z_pow.pkl', 'w') as f:
-		#    pickle.dump(self.z_pow[key], f)
-		#with open('zgrid.pkl', 'w') as f:
-		#    pickle.dump(zgrid, f)
-                z_prior = zgrid**self.z_pow[key] * \
-                    np.exp(-(zgrid/z_medians)**self.z_pow[key])
+                z_prior = self.zgrid[key]**self.z_pow[key] * \
+                    np.exp(-(self.zgrid[key]/z_medians)**self.z_pow[key])
 		if np.any(z_prior.sum(axis=1)[:, None] == 0.0):
 		    print "z_prior.sum(axis=1) is zero!"
-		    print "z_grid", zgrid
+		    print "z_grid", self.zgrid[key]
 	        floor_to_zero(z_prior)
                 z_prior /= z_prior.sum(axis=1)[:, None]
                 prior_weighted_like = self.coeff_marg_like[key] * \
@@ -747,35 +718,35 @@ class HBsep(object):
         # assign template weights
         self.template_weights = {}
 	weights_sum = 0.0
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
-            Ntemplate = np.int(self.model_fluxes[key].shape[0] / self.Nzs[i])
+        for cls in self.classes:
+            key = cls.label
+            Ntemplate = np.int(self.model_fluxes[key].shape[0] / cls.Nz)
             self.template_weights[key] = \
                 np.exp(np.array(hyperparms[count:count+Ntemplate]))
 	    if self.template_weights[key].sum() == 0.0:
 	        print "self.template_weights[{0}].sum() is zero!".format(key)
             weights_sum += self.template_weights[key].sum()
             count += Ntemplate
-	for i in range(self.Nclasses):
-            key = self.class_labels[i]
+	for cls in self.classes:
+            key = cls.label
 	    self.template_weights[key] /= weights_sum
 
         # prior parms
         if self.method == 1:
             self.z_medians = {}
-            for i in range(self.Nclasses):
-                if self.Nzs[i] == 1 or self.method != 1:
+            for cls in self.classes:
+                if cls.Nz==1 or self.method != 1:
                     continue
-                key = self.class_labels[i]
-                Ntemplate = np.int(self.model_fluxes[key].shape[0] / self.Nzs[i])
+                key = cls.label
+                Ntemplate = np.int(self.model_fluxes[key].shape[0] / cls.Nz)
                 self.z_medians[key] = \
                     np.array(hyperparms[count:count+Ntemplate])
                 count += Ntemplate
             self.z_pow = {}
-            for i in range(self.Nclasses):
-                if self.Nzs[i] == 1 or self.method != 1:
+            for cls in self.classes:
+                if cls.Nz==1 or self.method != 1:
                     continue
-                key = self.class_labels[i]
+                key = cls.label
                 self.z_pow[key] = hyperparms[count:count+1]
                 count += 1
 
@@ -786,8 +757,8 @@ class HBsep(object):
         self.tzc_marg_like = {}
         self.marg_like = np.zeros(self.Ndata)
         ind = self.use
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
+        for cls in self.classes:
+            key = cls.label
             self.tzc_marg_like[key] = np.zeros(self.Ndata)
             self.tzc_marg_like[key][ind] = \
                 np.sum(self.zc_marg_like[key][ind] *
@@ -821,17 +792,17 @@ class HBsep(object):
         """
         # initialize parameters, barf
         p0 = np.array([])
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
-            Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
+        for cls in self.classes:
+            key = cls.label
+            Ntemplate = self.model_fluxes[key].shape[0] / cls.Nz
             p0 = np.append(p0, np.ones(Ntemplate) * np.log(1./Ntemplate))
-        for i in range(self.Nclasses):
-            if self.Nzs[i] != 1 and self.method == 1:
-                key = self.class_labels[i]
-                Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
+        for cls in self.classes:
+            if cls.Nz != 1 and self.method == 1:
+                key = cls.label
+                Ntemplate = self.model_fluxes[key].shape[0] / cls.Nz
                 p0 = np.append(p0, np.ones(Ntemplate) * z_median[i])
-        for i in range(self.Nclasses):
-            if self.Nzs[i] != 1 and self.method == 1:
+        for cls in self.classes:
+            if cls.Nz != 1 and self.method == 1:
                 p0 = np.append(p0, z_pow[i])
         return p0
 
@@ -840,18 +811,18 @@ class HBsep(object):
         Make bounds for fmin_l_bfgs_b
         """
         bounds = []
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
-            Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
+        for cls in self.classes:
+            key = cls.label
+            Ntemplate = self.model_fluxes[key].shape[0] / cls.Nz
             bounds.extend([(-1.*np.Inf, np.Inf) for j in range(Ntemplate)])
-        for i in range(self.Nclasses):
-            if self.Nzs[i] != 1 and self.method == 1:
-                key = self.class_labels[i]
-                Ntemplate = self.model_fluxes[key].shape[0] / self.Nzs[i]
+        for cls in self.classes:
+            if cls.Nz != 1 and self.method == 1:
+                key = cls.label
+                Ntemplate = self.model_fluxes[key].shape[0] / cls.Nz
                 bounds.extend([(0.1, self.z_maxs[i]) for j in
                                range(Ntemplate)])
-        for i in range(self.Nclasses):
-            if self.Nzs[i] != 1 and self.method == 1:
+        for cls in self.classes:
+            if cls.Nz != 1 and self.method == 1:
                 bounds.extend([(0., 2.)])
         return bounds
 
@@ -886,8 +857,8 @@ class HBsep(object):
         Return array of relative likelihoods
         """
         relative_likelihoods = np.zeros((self.Ndata, self.Nclasses))
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
+        for (i, cls) in enumerate(self.classes):
+            key = cls.label
             relative_likelihoods[:, i] = self.tzc_marg_like[key]*\
                                          np.sum(self.template_weights[key])
         relative_likelihoods /= relative_likelihoods.sum(axis=1)[:, None]
@@ -926,7 +897,7 @@ class HBsep(object):
         out = np.zeros((likes.shape[0], likes.shape[1]+1))
         out[:, :-1] = likes
         out[:, -1] = flags
-        labels = [self.class_labels[i] for i in range(self.Nclasses)]
+        labels = [cls.label for cls in self.classes]
         labels.append('used')
         self.write_fits_table(filename, out, labels)
 
@@ -942,8 +913,8 @@ class HBsep(object):
         """
         labels = []
         minchi2s = np.zeros((self.Ndata, self.Nclasses))
-        for i in range(self.Nclasses):
-            key = self.class_labels[i]
+        for (i, cls) in enumerate(self.classes):
+            key = cls.label
             labels.append(key+' minchi2')
             minchi2s[:, i] = self.chi2s[key].min(axis=1)
 
