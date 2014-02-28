@@ -73,7 +73,7 @@ def juric_lum_func(sed_file, mags, filt_names):
     Mr = 4.0 + 11.86*ri - 10.74*ri**2 + 5.99*ri**3 - 1.20*ri**4
     C =  np.power(10.0, -0.4*(Mr - mags[ridx]))
     sed = np.loadtxt(sed_file)
-    L = 4*np.pi*(10*pc)**2*C*cumtrapz(sed[:,0], sed[:,1])[-1]
+    L = 4*np.pi*(10*pc)**2*C*cumtrapz(sed[:,1], sed[:,0])[-1]
     return L
 
 def load_pickles_dic():
