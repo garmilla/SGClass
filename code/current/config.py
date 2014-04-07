@@ -58,7 +58,3 @@ self.ra = 349.0
 self.dec = 1.0
 
 self.method = 2
-
-self.fuzz = 0.5
-
-self.fuzz_fac = 0.9
